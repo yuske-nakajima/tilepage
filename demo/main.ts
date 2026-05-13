@@ -32,10 +32,21 @@ function makePage(book: Book, title: string, shape: ObstacleOptions['shape']) {
   heading.textContent = title;
   page.element.appendChild(heading);
 
+  // 単色 div の obstacle にすると、text 回避が一目で分かる
+  const block = document.createElement('div');
+  block.style.background = '#2a2a2a';
+  block.style.color = '#faf8f3';
+  block.style.display = 'flex';
+  block.style.alignItems = 'center';
+  block.style.justifyContent = 'center';
+  block.style.fontFamily = 'system-ui, sans-serif';
+  block.style.fontSize = '0.85rem';
+  block.style.letterSpacing = '0.1em';
+  block.textContent = title;
+
   addObstacle(page, {
     at: { col: '2-5', row: '1-3' },
-    src: 'https://picsum.photos/seed/tilepage/600/400',
-    alt: title,
+    element: block,
     shape,
     shapeMargin: '0.8em',
   });
