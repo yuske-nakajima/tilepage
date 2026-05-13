@@ -11,8 +11,7 @@
 			"types": "./dist/tilepage.d.ts",
 			"import": "./dist/tilepage.js",
 			"require": "./dist/tilepage.umd.cjs"
-		},
-		"./style.css": "./dist/tilepage.css"
+		}
 	},
 	"files": [
 		"dist"

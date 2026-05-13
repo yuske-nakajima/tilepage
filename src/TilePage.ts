@@ -25,7 +25,7 @@ export interface Page {
 	columnElements: HTMLElement[];
 	obstacles: Obstacle[];
 	book: Book;
-	observer: ResizeObserver;
+	observer?: ResizeObserver;
 }
 
 export interface GridPos {
@@ -51,15 +51,18 @@ export interface Obstacle {
 
 export interface FlowOptions {
 	text?: string;
-	html?: string;
 }
 
-function parseGridRange(s: string): [number, number] {
+export function parseGridRange(s: string): [number, number] {
 	const m = s.match(/^(\d+)(?:-(\d+))?$/);
 	if (!m) throw new Error(`invalid grid range: ${s}`);
 	const start = Number.parseInt(m[1], 10);
-	const end = m[2] ? Number.parseInt(m[2], 10) + 1 : start + 1;
-	return [start, end];
+	const endInclusive = m[2] ? Number.parseInt(m[2], 10) : start;
+	if (start < 1) throw new Error(`grid range must start at 1 or greater: ${s}`);
+	if (endInclusive < start) {
+		throw new Error(`grid range end must be greater than or equal to start: ${s}`);
+	}
+	return [start, endInclusive + 1];
 }
 
 export function createBook(options: BookOptions = {}): Book {
@@ -105,7 +108,6 @@ export function addPage(book: Book, options: PageOptions = {}): Page {
 		columnElements,
 		obstacles: [],
 		book,
-		observer: undefined as unknown as ResizeObserver,
 	};
 
 	const observer = new ResizeObserver(() => {
@@ -155,17 +157,12 @@ export function addObstacle(page: Page, options: ObstacleOptions): Obstacle {
 
 export function addFlow(page: Page, options: FlowOptions = {}): void {
 	const text = options.text ?? '';
-	const html = options.html;
 	for (const col of page.columnElements) {
 		// 既存の float は保持し、テキスト部分のみ差し替える
 		const flowText = col.querySelector('.tilepage-flow-text');
 		const target = flowText ?? document.createElement('div');
 		target.className = 'tilepage-flow-text';
-		if (html !== undefined) {
-			target.innerHTML = html;
-		} else {
-			target.textContent = text;
-		}
+		target.textContent = text;
 		if (!flowText) col.appendChild(target);
 	}
 	reflowObstacles(page);
@@ -221,7 +218,7 @@ function reflowObstacles(page: Page): void {
 
 export function destroyBook(book: Book): void {
 	for (const page of book.pages) {
-		page.observer.disconnect();
+		page.observer?.disconnect();
 	}
 	book.root.remove();
 }

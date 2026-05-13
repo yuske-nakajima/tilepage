@@ -1,4 +1,6 @@
-export const VERSION = '0.0.1';
+declare const __VERSION__: string;
+
+export const VERSION: string = __VERSION__;
 export {
 	addFlow,
 	addObstacle,

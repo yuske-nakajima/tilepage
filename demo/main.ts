@@ -1,5 +1,3 @@
-declare const __VERSION__: string;
-
 import { addFlow, addObstacle, addPage, createBook, VERSION } from '../src';
 
 const app = document.getElementById('app');
@@ -7,7 +5,7 @@ if (!app) throw new Error('#app が見つかりません');
 
 const header = document.createElement('header');
 header.className = 'demo-header';
-header.textContent = `TilePage v${VERSION} (build: ${__VERSION__}) — 6 段組み、矩形を避けて流れる本文`;
+header.textContent = `TilePage v${VERSION} — 6 段組み、矩形を避けて流れる本文`;
 app.appendChild(header);
 
 const book = createBook({ container: app, columns: 6, gutter: '0.8em', padding: '4em 1.5em' });
