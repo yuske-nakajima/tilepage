@@ -69,6 +69,17 @@
   writing-mode: vertical-rl;
 }
 
+/* flow-text の block-size を column の block-size 以内に制約。
+   縦書きでは width = 物理水平 = block-axis のため、width: 100% で
+   block-axis 方向の overflow を防ぐ。横書きでも block-size は親に従う
+   ので影響なし。 */
+.tilepage-flow-text {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
 .tilepage-obstacle-float {
   visibility: hidden;
   float: inline-start;
