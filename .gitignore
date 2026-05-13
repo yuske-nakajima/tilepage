@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.claude/settings.local.json
+.vite/
+.vite.pid
+.serena
+.idea
+.vscode/
+demo-dist/
+test-results/
+playwright-report/
