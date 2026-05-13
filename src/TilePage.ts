@@ -207,8 +207,6 @@ function reflowObstacles(page: Page): void {
   const pageRect = page.element.getBoundingClientRect();
   if (pageRect.width === 0 || pageRect.height === 0) return;
 
-  const vertical = page.book.writingMode === 'vertical-rl';
-
   for (const obstacle of page.obstacles) {
     const obRect = obstacle.element.getBoundingClientRect();
     const obstacleBox: Rect = {
@@ -233,28 +231,15 @@ function reflowObstacles(page: Page): void {
       const clipped = clipPolygonByRect(absPolygon, columnBox);
       if (clipped.length < 3) continue;
 
-      // float の物理サイズ。
-      // 横書き: 幅 = column 幅 (block 軸), 高さ = clipped の max-Y (inline 軸の進行方向)
-      // 縦書き: 幅 = clipped の max-X (inline 軸の進行方向は右→左、float: inline-start で右端から),
-      //         高さ = column 高さ (block 軸)
-      let floatWidthPx: number;
-      let floatHeightPx: number;
-      if (vertical) {
-        let maxLocalX = 0;
-        for (const [x] of clipped) {
-          const localX = x - columnBox.x;
-          if (localX > maxLocalX) maxLocalX = localX;
-        }
-        floatWidthPx = maxLocalX;
-        floatHeightPx = columnBox.height;
-      } else {
-        let maxLocalY = 0;
-        for (const [, y] of clipped) {
-          const localY = y - columnBox.y;
-          if (localY > maxLocalY) maxLocalY = localY;
-        }
-        floatWidthPx = columnBox.width;
-        floatHeightPx = maxLocalY;
+      // float の物理 box は「column 全幅 × 障害物の最下端まで」。
+      // float: inline-start により、横書き (inline=横) では top-left に、
+      // 縦書き (inline=縦) では top-right にアンカーされるが、width=column 全幅のため
+      // 両モードで同じ物理矩形 (top to maxY, 全幅) を占有する。
+      // shape-outside polygon の座標は物理 px なので writing-mode 不問。
+      let maxLocalY = 0;
+      for (const [, y] of clipped) {
+        const localY = y - columnBox.y;
+        if (localY > maxLocalY) maxLocalY = localY;
       }
 
       const localPoints = clipped
@@ -263,8 +248,8 @@ function reflowObstacles(page: Page): void {
 
       const float = document.createElement('div');
       float.className = 'tilepage-obstacle-float';
-      float.style.width = `${floatWidthPx}px`;
-      float.style.height = `${floatHeightPx}px`;
+      float.style.width = `${columnBox.width}px`;
+      float.style.height = `${maxLocalY}px`;
       float.style.shapeOutside = `polygon(${localPoints})`;
       float.style.shapeMargin = obstacle.shapeMargin;
 
