@@ -1,14 +1,20 @@
-import { addFlow, addObstacle, addPage, createBook, VERSION } from '../src';
+import {
+  addFlow,
+  addObstacle,
+  addPage,
+  type Book,
+  createBook,
+  type ObstacleOptions,
+  VERSION,
+} from '../src';
 
 const app = document.getElementById('app');
 if (!app) throw new Error('#app が見つかりません');
 
 const header = document.createElement('header');
 header.className = 'demo-header';
-header.textContent = `TilePage v${VERSION} — rect / circle / polygon の 3 形状を 6 段組みで`;
+header.textContent = `TilePage v${VERSION} — 横書き 3 形状 + 縦書き`;
 app.appendChild(header);
-
-const book = createBook({ container: app, columns: 6, gutter: '0.8em', padding: '4em 1.5em' });
 
 const longText =
   '本文がこの障害物を避けて 6 段組みに流れる。矩形・円・任意多角形の 3 形状に対応し、' +
@@ -19,7 +25,7 @@ const longText =
   'A book is pages. A page is a viewport. Place rectangles. Pour text. ' +
   'これが TilePage のメンタルモデルである。';
 
-function makePage(title: string, shape: Parameters<typeof addObstacle>[1]['shape']) {
+function makePage(book: Book, title: string, shape: ObstacleOptions['shape']) {
   const page = addPage(book);
   const heading = document.createElement('div');
   heading.className = 'demo-page-title';
@@ -36,9 +42,15 @@ function makePage(title: string, shape: Parameters<typeof addObstacle>[1]['shape
   addFlow(page, { text: longText.repeat(3) });
 }
 
-makePage('rect (default)', 'rect');
-makePage('circle', 'circle');
-makePage('polygon — diamond', {
+const bookH = createBook({
+  container: app,
+  columns: 6,
+  gutter: '0.8em',
+  padding: '4em 1.5em',
+});
+makePage(bookH, 'rect (default)', 'rect');
+makePage(bookH, 'circle', 'circle');
+makePage(bookH, 'polygon — diamond', {
   type: 'polygon',
   points: [
     [0.5, 0],
@@ -47,3 +59,14 @@ makePage('polygon — diamond', {
     [0, 0.5],
   ],
 });
+
+// 縦書きデモ (vertical-rl)。スクロール方向は writingMode から自動 (horizontal)。
+const bookV = createBook({
+  container: app,
+  columns: 6,
+  gutter: '0.8em',
+  padding: '4em 1.5em',
+  writingMode: 'vertical-rl',
+});
+makePage(bookV, '縦書き rect', 'rect');
+makePage(bookV, '縦書き circle', 'circle');

@@ -8,16 +8,23 @@ import {
   shapeToClipPath,
 } from './utils/polygon';
 
+export type WritingMode = 'horizontal-tb' | 'vertical-rl';
+export type ScrollDirection = 'vertical' | 'horizontal';
+
 export interface BookOptions {
   container?: HTMLElement;
   columns?: number;
   gutter?: string;
   padding?: string;
+  writingMode?: WritingMode;
+  scrollDirection?: ScrollDirection;
 }
 
 export interface Book {
   root: HTMLElement;
   columns: number;
+  writingMode: WritingMode;
+  scrollDirection: ScrollDirection;
   pages: Page[];
 }
 
@@ -80,16 +87,22 @@ export function createBook(options: BookOptions = {}): Book {
   const root = document.createElement('div');
   root.className = 'tilepage-book';
   const columns = options.columns ?? 6;
+  const writingMode: WritingMode = options.writingMode ?? 'horizontal-tb';
+  const scrollDirection: ScrollDirection =
+    options.scrollDirection ?? (writingMode === 'vertical-rl' ? 'horizontal' : 'vertical');
   root.style.setProperty('--tilepage-columns', String(columns));
   if (options.gutter) root.style.setProperty('--tilepage-gutter', options.gutter);
   if (options.padding) root.style.setProperty('--tilepage-padding', options.padding);
+  root.dataset.writingMode = writingMode;
+  root.dataset.scroll = scrollDirection;
   if (options.container) options.container.appendChild(root);
-  return { root, columns, pages: [] };
+  return { root, columns, writingMode, scrollDirection, pages: [] };
 }
 
 export function addPage(book: Book, options: PageOptions = {}): Page {
   const page = document.createElement('div');
   page.className = 'tilepage-page';
+  page.dataset.writingMode = book.writingMode;
   if (options.id) page.id = options.id;
 
   const obstacleLayer = document.createElement('div');
@@ -194,6 +207,8 @@ function reflowObstacles(page: Page): void {
   const pageRect = page.element.getBoundingClientRect();
   if (pageRect.width === 0 || pageRect.height === 0) return;
 
+  const vertical = page.book.writingMode === 'vertical-rl';
+
   for (const obstacle of page.obstacles) {
     const obRect = obstacle.element.getBoundingClientRect();
     const obstacleBox: Rect = {
@@ -202,7 +217,6 @@ function reflowObstacles(page: Page): void {
       width: obRect.width,
       height: obRect.height,
     };
-    // 正規化された polygon を obstacle 要素のページ絶対座標に展開
     const absPolygon: Point[] = obstacle.polygon.map(([nx, ny]) => [
       obstacleBox.x + nx * obstacleBox.width,
       obstacleBox.y + ny * obstacleBox.height,
@@ -219,12 +233,28 @@ function reflowObstacles(page: Page): void {
       const clipped = clipPolygonByRect(absPolygon, columnBox);
       if (clipped.length < 3) continue;
 
-      // float は段の左端・上端基準。float のサイズは clipped の bounding box の bottom まで取ると
-      // テキストが float の下まで回り込めるので、column の幅と clipped の最大 y までを使う。
-      let maxLocalY = 0;
-      for (const [, y] of clipped) {
-        const localY = y - columnBox.y;
-        if (localY > maxLocalY) maxLocalY = localY;
+      // float の物理サイズ。
+      // 横書き: 幅 = column 幅 (block 軸), 高さ = clipped の max-Y (inline 軸の進行方向)
+      // 縦書き: 幅 = clipped の max-X (inline 軸の進行方向は右→左、float: inline-start で右端から),
+      //         高さ = column 高さ (block 軸)
+      let floatWidthPx: number;
+      let floatHeightPx: number;
+      if (vertical) {
+        let maxLocalX = 0;
+        for (const [x] of clipped) {
+          const localX = x - columnBox.x;
+          if (localX > maxLocalX) maxLocalX = localX;
+        }
+        floatWidthPx = maxLocalX;
+        floatHeightPx = columnBox.height;
+      } else {
+        let maxLocalY = 0;
+        for (const [, y] of clipped) {
+          const localY = y - columnBox.y;
+          if (localY > maxLocalY) maxLocalY = localY;
+        }
+        floatWidthPx = columnBox.width;
+        floatHeightPx = maxLocalY;
       }
 
       const localPoints = clipped
@@ -233,9 +263,8 @@ function reflowObstacles(page: Page): void {
 
       const float = document.createElement('div');
       float.className = 'tilepage-obstacle-float';
-      float.style.float = 'left';
-      float.style.width = `${columnBox.width}px`;
-      float.style.height = `${maxLocalY}px`;
+      float.style.width = `${floatWidthPx}px`;
+      float.style.height = `${floatHeightPx}px`;
       float.style.shapeOutside = `polygon(${localPoints})`;
       float.style.shapeMargin = obstacle.shapeMargin;
 

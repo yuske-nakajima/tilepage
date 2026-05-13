@@ -6,6 +6,15 @@
   overflow-y: auto;
 }
 
+.tilepage-book[data-scroll="horizontal"] {
+  display: flex;
+  flex-direction: row-reverse;
+  scroll-snap-type: x mandatory;
+  overflow-x: auto;
+  overflow-y: hidden;
+  width: 100vw;
+}
+
 .tilepage-page {
   position: relative;
   width: 100%;
@@ -13,6 +22,11 @@
   scroll-snap-align: start;
   overflow: hidden;
   box-sizing: border-box;
+}
+
+.tilepage-book[data-scroll="horizontal"] > .tilepage-page {
+  flex: 0 0 100vw;
+  width: 100vw;
 }
 
 .tilepage-obstacle-layer {
@@ -50,8 +64,14 @@
   box-sizing: border-box;
 }
 
+.tilepage-page[data-writing-mode="vertical-rl"] .tilepage-column,
+.tilepage-page[data-writing-mode="vertical-rl"] .tilepage-flow-text {
+  writing-mode: vertical-rl;
+}
+
 .tilepage-obstacle-float {
   visibility: hidden;
+  float: inline-start;
 }
 
 .tilepage-obstacle {
