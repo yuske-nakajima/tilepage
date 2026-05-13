@@ -1,31 +1,43 @@
 html,
 body {
-	margin: 0;
-	padding: 0;
-	font-family: "Times New Roman", "游明朝", YuMincho, serif;
-	background: #faf8f3;
-	color: #1a1a1a;
+  margin: 0;
+  padding: 0;
+  font-family: "Times New Roman", "游明朝", YuMincho, serif;
+  background: #faf8f3;
+  color: #1a1a1a;
 }
 
 #app {
-	width: 100vw;
+  width: 100vw;
 }
 
 .demo-header {
-	position: fixed;
-	top: 0;
-	left: 0;
-	right: 0;
-	padding: 0.5em 1em;
-	background: rgba(255, 255, 255, 0.9);
-	border-bottom: 1px solid #ddd;
-	font-size: 0.8rem;
-	font-family: system-ui, sans-serif;
-	z-index: 100;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 0.5em 1em;
+  background: rgba(255, 255, 255, 0.9);
+  border-bottom: 1px solid #ddd;
+  font-size: 0.8rem;
+  font-family: system-ui, sans-serif;
+  z-index: 100;
 }
 
 .tilepage-flow-text {
-	font-size: 0.95rem;
-	line-height: 1.7;
-	text-align: justify;
+  font-size: 0.95rem;
+  line-height: 1.7;
+  text-align: justify;
+}
+
+.demo-page-title {
+  position: absolute;
+  top: 1.5em;
+  left: 1.5em;
+  font-family: system-ui, sans-serif;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #888;
+  z-index: 3;
 }
