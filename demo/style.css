@@ -29,3 +29,15 @@ body {
 	line-height: 1.7;
 	text-align: justify;
 }
+
+.demo-page-title {
+	position: absolute;
+	top: 1.5em;
+	left: 1.5em;
+	font-family: system-ui, sans-serif;
+	font-size: 0.75rem;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: #888;
+	z-index: 3;
+}

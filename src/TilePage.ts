@@ -1,5 +1,12 @@
 import { injectStyles } from './styles/inject';
-import { intersect, type Rect } from './utils/intersect';
+import {
+	clipPolygonByRect,
+	normalizeShape,
+	type ObstacleShape,
+	type Point,
+	type Rect,
+	shapeToClipPath,
+} from './utils/polygon';
 
 export interface BookOptions {
 	container?: HTMLElement;
@@ -38,7 +45,9 @@ export interface ObstacleOptions {
 	element?: HTMLElement;
 	src?: string;
 	alt?: string;
+	shape?: ObstacleShape;
 	shapeMargin?: string;
+	syncClipPath?: boolean;
 }
 
 export interface Obstacle {
@@ -47,6 +56,7 @@ export interface Obstacle {
 	rowRange: [number, number];
 	floats: HTMLElement[];
 	shapeMargin: string;
+	polygon: Point[];
 }
 
 export interface FlowOptions {
@@ -137,6 +147,13 @@ export function addObstacle(page: Page, options: ObstacleOptions): Obstacle {
 	const rowRange = parseGridRange(options.at.row);
 	el.style.gridColumn = `${colRange[0]} / ${colRange[1]}`;
 	el.style.gridRow = `${rowRange[0]} / ${rowRange[1]}`;
+
+	const polygon = normalizeShape(options.shape ?? 'rect');
+	const syncClipPath = options.syncClipPath ?? true;
+	if (syncClipPath && options.shape && options.shape !== 'rect') {
+		el.style.clipPath = shapeToClipPath(polygon);
+	}
+
 	page.obstacleLayer.appendChild(el);
 
 	const obstacle: Obstacle = {
@@ -145,6 +162,7 @@ export function addObstacle(page: Page, options: ObstacleOptions): Obstacle {
 		rowRange,
 		floats: [],
 		shapeMargin: options.shapeMargin ?? '0',
+		polygon,
 	};
 	page.obstacles.push(obstacle);
 
@@ -158,7 +176,6 @@ export function addObstacle(page: Page, options: ObstacleOptions): Obstacle {
 export function addFlow(page: Page, options: FlowOptions = {}): void {
 	const text = options.text ?? '';
 	for (const col of page.columnElements) {
-		// 既存の float は保持し、テキスト部分のみ差し替える
 		const flowText = col.querySelector('.tilepage-flow-text');
 		const target = flowText ?? document.createElement('div');
 		target.className = 'tilepage-flow-text';
@@ -185,6 +202,11 @@ function reflowObstacles(page: Page): void {
 			width: obRect.width,
 			height: obRect.height,
 		};
+		// 正規化された polygon を obstacle 要素のページ絶対座標に展開
+		const absPolygon: Point[] = obstacle.polygon.map(([nx, ny]) => [
+			obstacleBox.x + nx * obstacleBox.width,
+			obstacleBox.y + ny * obstacleBox.height,
+		]);
 
 		for (const col of page.columnElements) {
 			const colRect = col.getBoundingClientRect();
@@ -194,20 +216,27 @@ function reflowObstacles(page: Page): void {
 				width: colRect.width,
 				height: colRect.height,
 			};
-			const overlap = intersect(obstacleBox, columnBox);
-			if (!overlap) continue;
+			const clipped = clipPolygonByRect(absPolygon, columnBox);
+			if (clipped.length < 3) continue;
 
-			const localTop = overlap.y - columnBox.y;
-			const localBottom = localTop + overlap.height;
-			const localLeft = overlap.x - columnBox.x;
-			const localRight = localLeft + overlap.width;
+			// float は段の左端・上端基準。float のサイズは clipped の bounding box の bottom まで取ると
+			// テキストが float の下まで回り込めるので、column の幅と clipped の最大 y までを使う。
+			let maxLocalY = 0;
+			for (const [, y] of clipped) {
+				const localY = y - columnBox.y;
+				if (localY > maxLocalY) maxLocalY = localY;
+			}
+
+			const localPoints = clipped
+				.map(([x, y]) => `${x - columnBox.x}px ${y - columnBox.y}px`)
+				.join(', ');
 
 			const float = document.createElement('div');
 			float.className = 'tilepage-obstacle-float';
 			float.style.float = 'left';
 			float.style.width = `${columnBox.width}px`;
-			float.style.height = `${localBottom}px`;
-			float.style.shapeOutside = `polygon(${localLeft}px ${localTop}px, ${localRight}px ${localTop}px, ${localRight}px ${localBottom}px, ${localLeft}px ${localBottom}px)`;
+			float.style.height = `${maxLocalY}px`;
+			float.style.shapeOutside = `polygon(${localPoints})`;
 			float.style.shapeMargin = obstacle.shapeMargin;
 
 			col.insertBefore(float, col.firstChild);

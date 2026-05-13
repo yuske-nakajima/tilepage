@@ -16,3 +16,4 @@ export {
 	type Page,
 	type PageOptions,
 } from './TilePage';
+export type { ObstacleShape, Point } from './utils/polygon';
