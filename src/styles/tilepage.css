@@ -1,0 +1,61 @@
+.tilepage-book {
+	display: block;
+	width: 100%;
+	scroll-snap-type: y mandatory;
+	overflow-y: auto;
+}
+
+.tilepage-page {
+	position: relative;
+	width: 100%;
+	height: 100vh;
+	scroll-snap-align: start;
+	overflow: hidden;
+	box-sizing: border-box;
+}
+
+.tilepage-obstacle-layer {
+	position: absolute;
+	inset: 0;
+	display: grid;
+	grid-template-columns: repeat(var(--tilepage-columns, 6), 1fr);
+	column-gap: var(--tilepage-gutter, 1em);
+	padding: var(--tilepage-padding, 2em 1.5em);
+	box-sizing: border-box;
+	pointer-events: none;
+	z-index: 2;
+}
+
+.tilepage-obstacle-layer > * {
+	pointer-events: auto;
+}
+
+.tilepage-flow-layer {
+	position: relative;
+	display: grid;
+	grid-template-columns: repeat(var(--tilepage-columns, 6), 1fr);
+	column-gap: var(--tilepage-gutter, 1em);
+	padding: var(--tilepage-padding, 2em 1.5em);
+	box-sizing: border-box;
+	width: 100%;
+	height: 100%;
+	z-index: 1;
+}
+
+.tilepage-column {
+	position: relative;
+	overflow: hidden;
+	height: 100%;
+	box-sizing: border-box;
+}
+
+.tilepage-obstacle-float {
+	visibility: hidden;
+}
+
+.tilepage-obstacle {
+	display: block;
+	max-width: 100%;
+	max-height: 100%;
+	object-fit: cover;
+}
