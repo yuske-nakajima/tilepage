@@ -11,39 +11,39 @@ app.appendChild(header);
 const book = createBook({ container: app, columns: 6, gutter: '0.8em', padding: '4em 1.5em' });
 
 const longText =
-	'本文がこの障害物を避けて 6 段組みに流れる。矩形・円・任意多角形の 3 形状に対応し、' +
-	'clip-path で見た目を整形しつつ、shape-outside で同じ形のテキスト回避を実現する。' +
-	'矩形と段の交差は Sutherland-Hodgman 多角形クリッピングで計算され、' +
-	'各段に注入される不可視 float の shape-outside polygon としてレンダリングされる。' +
-	'ResizeObserver でブラウザ幅変更時のリフローにも追従する。' +
-	'A book is pages. A page is a viewport. Place rectangles. Pour text. ' +
-	'これが TilePage のメンタルモデルである。';
+  '本文がこの障害物を避けて 6 段組みに流れる。矩形・円・任意多角形の 3 形状に対応し、' +
+  'clip-path で見た目を整形しつつ、shape-outside で同じ形のテキスト回避を実現する。' +
+  '矩形と段の交差は Sutherland-Hodgman 多角形クリッピングで計算され、' +
+  '各段に注入される不可視 float の shape-outside polygon としてレンダリングされる。' +
+  'ResizeObserver でブラウザ幅変更時のリフローにも追従する。' +
+  'A book is pages. A page is a viewport. Place rectangles. Pour text. ' +
+  'これが TilePage のメンタルモデルである。';
 
 function makePage(title: string, shape: Parameters<typeof addObstacle>[1]['shape']) {
-	const page = addPage(book);
-	const heading = document.createElement('div');
-	heading.className = 'demo-page-title';
-	heading.textContent = title;
-	page.element.appendChild(heading);
+  const page = addPage(book);
+  const heading = document.createElement('div');
+  heading.className = 'demo-page-title';
+  heading.textContent = title;
+  page.element.appendChild(heading);
 
-	addObstacle(page, {
-		at: { col: '2-5', row: '1-3' },
-		src: 'https://picsum.photos/seed/tilepage/600/400',
-		alt: title,
-		shape,
-		shapeMargin: '0.8em',
-	});
-	addFlow(page, { text: longText.repeat(3) });
+  addObstacle(page, {
+    at: { col: '2-5', row: '1-3' },
+    src: 'https://picsum.photos/seed/tilepage/600/400',
+    alt: title,
+    shape,
+    shapeMargin: '0.8em',
+  });
+  addFlow(page, { text: longText.repeat(3) });
 }
 
 makePage('rect (default)', 'rect');
 makePage('circle', 'circle');
 makePage('polygon — diamond', {
-	type: 'polygon',
-	points: [
-		[0.5, 0],
-		[1, 0.5],
-		[0.5, 1],
-		[0, 0.5],
-	],
+  type: 'polygon',
+  points: [
+    [0.5, 0],
+    [1, 0.5],
+    [0.5, 1],
+    [0, 0.5],
+  ],
 });

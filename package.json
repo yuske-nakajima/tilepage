@@ -1,63 +1,63 @@
 {
-	"name": "@yuske-nakajima/tilepage",
-	"version": "0.0.1",
-	"description": "Web 上で新聞・フリーペーパー的な紙面組版を実現するゼロ依存ライブラリ。矩形を置く、テキストを注ぐ。",
-	"type": "module",
-	"main": "./dist/tilepage.umd.cjs",
-	"module": "./dist/tilepage.js",
-	"types": "./dist/tilepage.d.ts",
-	"exports": {
-		".": {
-			"types": "./dist/tilepage.d.ts",
-			"import": "./dist/tilepage.js",
-			"require": "./dist/tilepage.umd.cjs"
-		}
-	},
-	"files": [
-		"dist"
-	],
-	"sideEffects": false,
-	"packageManager": "pnpm@11.0.4",
-	"scripts": {
-		"dev": "vite",
-		"build": "vite build && tsc --emitDeclarationOnly",
-		"build:demo": "vite build --config vite.config.demo.ts",
-		"check": "biome check . && eslint .",
-		"format": "biome format --write .",
-		"test": "vitest run",
-		"test:watch": "vitest",
-		"test:e2e": "playwright test",
-		"prepublishOnly": "pnpm run build"
-	},
-	"keywords": [
-		"typesetting",
-		"layout",
-		"newspaper",
-		"magazine",
-		"text-wrap",
-		"shape-outside",
-		"css-grid",
-		"zero-dependency"
-	],
-	"author": "yuske-nakajima",
-	"license": "MIT",
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/yuske-nakajima/tilepage.git"
-	},
-	"homepage": "https://github.com/yuske-nakajima/tilepage",
-	"bugs": {
-		"url": "https://github.com/yuske-nakajima/tilepage/issues"
-	},
-	"devDependencies": {
-		"@biomejs/biome": "2.4.14",
-		"@playwright/test": "1.59.1",
-		"eslint": "10.3.0",
-		"jsdom": "29.1.1",
-		"terser": "5.46.2",
-		"typescript": "6.0.3",
-		"typescript-eslint": "8.59.1",
-		"vite": "8.0.10",
-		"vitest": "4.1.5"
-	}
+  "name": "@yuske-nakajima/tilepage",
+  "version": "0.0.1",
+  "description": "Web 上で新聞・フリーペーパー的な紙面組版を実現するゼロ依存ライブラリ。矩形を置く、テキストを注ぐ。",
+  "type": "module",
+  "main": "./dist/tilepage.umd.cjs",
+  "module": "./dist/tilepage.js",
+  "types": "./dist/tilepage.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/tilepage.d.ts",
+      "import": "./dist/tilepage.js",
+      "require": "./dist/tilepage.umd.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "packageManager": "pnpm@11.0.4",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && tsc --emitDeclarationOnly",
+    "build:demo": "vite build --config vite.config.demo.ts",
+    "check": "biome check . && eslint .",
+    "format": "biome format --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "prepublishOnly": "pnpm run build"
+  },
+  "keywords": [
+    "typesetting",
+    "layout",
+    "newspaper",
+    "magazine",
+    "text-wrap",
+    "shape-outside",
+    "css-grid",
+    "zero-dependency"
+  ],
+  "author": "yuske-nakajima",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yuske-nakajima/tilepage.git"
+  },
+  "homepage": "https://github.com/yuske-nakajima/tilepage",
+  "bugs": {
+    "url": "https://github.com/yuske-nakajima/tilepage/issues"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.14",
+    "@playwright/test": "1.59.1",
+    "eslint": "10.3.0",
+    "jsdom": "29.1.1",
+    "terser": "5.46.2",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.59.1",
+    "vite": "8.0.10",
+    "vitest": "4.1.5"
+  }
 }
