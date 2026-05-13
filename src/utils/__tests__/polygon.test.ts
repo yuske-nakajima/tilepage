@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   circlePolygon,
   clipPolygonByRect,
+  isConvexPolygon,
   normalizeShape,
   type Point,
   shapeToClipPath,
@@ -71,6 +72,112 @@ describe('normalizeShape', () => {
         ],
       }),
     ).toThrow();
+  });
+
+  it('polygon に NaN / Infinity が含まれる場合は例外を投げる', () => {
+    expect(() =>
+      normalizeShape({
+        type: 'polygon',
+        points: [
+          [0, 0],
+          [Number.NaN, 1],
+          [1, 1],
+        ],
+      }),
+    ).toThrow(/finite/);
+    expect(() =>
+      normalizeShape({
+        type: 'polygon',
+        points: [
+          [0, 0],
+          [Number.POSITIVE_INFINITY, 1],
+          [1, 1],
+        ],
+      }),
+    ).toThrow(/finite/);
+  });
+
+  it('polygon の点が [0, 1] 範囲外の場合は例外を投げる', () => {
+    expect(() =>
+      normalizeShape({
+        type: 'polygon',
+        points: [
+          [0, 0],
+          [1.5, 0.5],
+          [1, 1],
+        ],
+      }),
+    ).toThrow(/normalized/);
+    expect(() =>
+      normalizeShape({
+        type: 'polygon',
+        points: [
+          [0, 0],
+          [-0.1, 0.5],
+          [1, 1],
+        ],
+      }),
+    ).toThrow(/normalized/);
+  });
+
+  it('凹形 polygon は拒否される', () => {
+    // 矢印形 (凹): 中央が凹む
+    expect(() =>
+      normalizeShape({
+        type: 'polygon',
+        points: [
+          [0, 0],
+          [1, 0],
+          [0.5, 0.5],
+          [1, 1],
+          [0, 1],
+        ],
+      }),
+    ).toThrow(/convex/);
+  });
+});
+
+describe('isConvexPolygon', () => {
+  it('凸多角形 (矩形) は true', () => {
+    expect(
+      isConvexPolygon([
+        [0, 0],
+        [1, 0],
+        [1, 1],
+        [0, 1],
+      ]),
+    ).toBe(true);
+  });
+
+  it('凸多角形 (三角形) は true', () => {
+    expect(
+      isConvexPolygon([
+        [0.5, 0],
+        [1, 1],
+        [0, 1],
+      ]),
+    ).toBe(true);
+  });
+
+  it('凹多角形 (矢印) は false', () => {
+    expect(
+      isConvexPolygon([
+        [0, 0],
+        [1, 0],
+        [0.5, 0.5],
+        [1, 1],
+        [0, 1],
+      ]),
+    ).toBe(false);
+  });
+
+  it('点数 3 未満は false', () => {
+    expect(
+      isConvexPolygon([
+        [0, 0],
+        [1, 0],
+      ]),
+    ).toBe(false);
   });
 });
 
@@ -143,7 +250,7 @@ describe('clipPolygonByRect', () => {
     expect(result.length).toBeGreaterThanOrEqual(3);
   });
 
-  it('矩形が完全に polygon を含む場合は矩形そのものを返す', () => {
+  it('polygon が矩形を完全に含む場合は矩形そのものを返す', () => {
     const bigPoly: Point[] = [
       [-100, -100],
       [100, -100],

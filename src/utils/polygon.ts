@@ -35,9 +35,38 @@ export function normalizeShape(shape: ObstacleShape): Point[] {
     if (shape.points.length < 3) {
       throw new Error(`polygon: points must have >= 3 entries, got ${shape.points.length}`);
     }
-    return shape.points.map(([x, y]) => [x, y] as Point);
+    const points: Point[] = shape.points.map(([x, y]) => [x, y] as Point);
+    for (const [x, y] of points) {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        throw new Error(`polygon: points must be finite numbers, got [${x}, ${y}]`);
+      }
+      if (x < 0 || x > 1 || y < 0 || y > 1) {
+        throw new Error(`polygon: points must be in normalized [0, 1] range, got [${x}, ${y}]`);
+      }
+    }
+    if (!isConvexPolygon(points)) {
+      // Sutherland-Hodgman は subject polygon が凸であることを前提にしている。
+      // 凹形は矩形との交差が複数領域に分かれうるが現状の実装は単一 polygon しか返せない。
+      throw new Error('polygon: only convex polygons are supported');
+    }
+    return points;
   }
   throw new Error('unknown shape');
+}
+
+export function isConvexPolygon(points: ReadonlyArray<Point>): boolean {
+  if (points.length < 3) return false;
+  let sign = 0;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    const c = points[(i + 2) % points.length];
+    const cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+    if (cross === 0) continue;
+    if (sign === 0) sign = cross > 0 ? 1 : -1;
+    else if ((cross > 0 ? 1 : -1) !== sign) return false;
+  }
+  return true;
 }
 
 export function shapeToClipPath(polygon: ReadonlyArray<Point>): string {
