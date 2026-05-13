@@ -61,4 +61,38 @@ test.describe('TilePage demo', () => {
     const firstText = await flowTexts.first().textContent();
     expect(firstText?.length ?? 0).toBeGreaterThan(0);
   });
+
+  test('縦書き obstacle 内部に text が overlap しない', async ({ page }) => {
+    await page.setViewportSize({ width: 1900, height: 1900 });
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(800);
+
+    const verticalBook = page.locator('.tilepage-book').nth(1);
+    await verticalBook.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+
+    const verticalPage = page.locator('.tilepage-page[data-writing-mode="vertical-rl"]').first();
+    const obstacle = verticalPage.locator('.tilepage-obstacle');
+    const obBox = await obstacle.boundingBox();
+    if (!obBox) throw new Error('obstacle not found');
+
+    // obstacle 内部を 8x8 grid でサンプリング、obstacle 自身でない要素が
+    // topmost に来る場合は overlap と判定
+    let overlap = 0;
+    for (let i = 1; i < 9; i++) {
+      for (let j = 1; j < 9; j++) {
+        const x = obBox.x + 5 + ((obBox.width - 10) * i) / 9;
+        const y = obBox.y + 5 + ((obBox.height - 10) * j) / 9;
+        const tag = await page.evaluate(
+          ([x, y]) => {
+            const el = document.elementFromPoint(x, y);
+            return el ? `${el.tagName}.${(el.className as string).split(' ')[0] || ''}` : 'null';
+          },
+          [x, y],
+        );
+        if (!tag.includes('obstacle')) overlap++;
+      }
+    }
+    expect(overlap).toBe(0);
+  });
 });
