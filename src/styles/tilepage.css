@@ -34,6 +34,7 @@
   inset: 0;
   display: grid;
   grid-template-columns: repeat(var(--tilepage-columns, 6), 1fr);
+  grid-template-rows: repeat(var(--tilepage-rows, 6), 1fr);
   column-gap: var(--tilepage-gutter, 1em);
   padding: var(--tilepage-padding, 2em 1.5em);
   box-sizing: border-box;
@@ -65,6 +66,11 @@
   box-sizing: border-box;
 }
 
+/* 縦書きモードでは grid layout 自体に writing-mode を適用し、
+   grid-template-columns が inline 軸 = 縦方向のトラック (= 横方向の band) を生成。
+   これにより「段」が新聞風の横帯となり、obstacle で text が左方向 (block 方向) に逃げる。 */
+.tilepage-page[data-writing-mode="vertical-rl"] .tilepage-obstacle-layer,
+.tilepage-page[data-writing-mode="vertical-rl"] .tilepage-flow-layer,
 .tilepage-page[data-writing-mode="vertical-rl"] .tilepage-column,
 .tilepage-page[data-writing-mode="vertical-rl"] .tilepage-flow-text {
   writing-mode: vertical-rl;
