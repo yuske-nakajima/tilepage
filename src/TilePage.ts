@@ -18,7 +18,13 @@ export type { WritingMode } from './flow/axis';
 // - number: 固定 N。grid-template-columns: repeat(N, 1fr)
 // - { width }: 段幅宣言。N は page inline-size から導出する。
 //   max を指定すると 1 段の上限幅 (1fr のままだと viewport をまたぐ fluid 拡張になる)。
-export type ColumnsConfig = number | { width: string; max?: string };
+// - { supported, breakpoints }: 著者が許可した N の集合に離散スナップする。
+//   breakpoints[N] は CSS 長さリテラル ('40em' 等)。viewport inline-size が
+//   threshold 以上を満たすうち最大の N を選ぶ。該当なしは supported の最小値。
+export type ColumnsConfig =
+  | number
+  | { width: string; max?: string }
+  | { supported: number[]; breakpoints: Record<number, string> };
 
 export interface BookOptions {
   container?: HTMLElement;
@@ -99,6 +105,16 @@ export function parseGridRange(s: string): [number, number] {
   return [start, endInclusive + 1];
 }
 
+// ColumnsConfig 3 モードの判別 helper。Union 拡張に伴う runtime guard。
+function isFixedNumberMode(config: ColumnsConfig): config is number {
+  return typeof config === 'number';
+}
+function isSupportedMode(
+  config: ColumnsConfig,
+): config is { supported: number[]; breakpoints: Record<number, string> } {
+  return typeof config === 'object' && 'supported' in config;
+}
+
 export function createBook(options: BookOptions = {}): Book {
   injectStyles();
   const root = document.createElement('div');
@@ -108,9 +124,22 @@ export function createBook(options: BookOptions = {}): Book {
   if (options.gutter) root.style.setProperty('--tilepage-gutter', options.gutter);
   if (options.padding) root.style.setProperty('--tilepage-padding', options.padding);
   root.dataset.writingMode = writingMode;
-  // 初期 N は固定 N モードなら指定値、width モードなら 1 で開始する (後で実測して上書き)。
-  const initialColumns = typeof columnsConfig === 'number' ? columnsConfig : 1;
+  // 初期 N の決め方:
+  // - 固定 N モード: そのまま使う
+  // - supportedColumns モード: 最小値で開始 (page DOM 取得後に viewport で再評価)
+  // - width モード: 1 で開始 (page DOM 取得後に実測)
+  let initialColumns: number;
+  if (isFixedNumberMode(columnsConfig)) {
+    initialColumns = columnsConfig;
+  } else if (isSupportedMode(columnsConfig)) {
+    validateSupportedConfig(columnsConfig);
+    initialColumns = Math.min(...columnsConfig.supported);
+  } else {
+    initialColumns = 1;
+  }
   applyColumnsToRoot(root, columnsConfig, initialColumns);
+  // E2E / DevTools 用に root へ現在 N を同期する (data-active-columns)。
+  root.dataset.activeColumns = String(initialColumns);
   if (options.container) options.container.appendChild(root);
   return {
     root,
@@ -121,6 +150,27 @@ export function createBook(options: BookOptions = {}): Book {
     _sourceText: '',
     _observeResize: options.observeResize ?? true,
   };
+}
+
+// supportedColumns / breakpoints の整合性チェック。
+// breakpoints のキーは supported に含まれる N でなければならない (設計判断)。
+function validateSupportedConfig(config: {
+  supported: number[];
+  breakpoints: Record<number, string>;
+}): void {
+  if (config.supported.length === 0) {
+    console.warn('[tilepage] columns.supported is empty; defaulting N=1');
+    return;
+  }
+  const set = new Set(config.supported);
+  for (const key of Object.keys(config.breakpoints)) {
+    const n = Number.parseInt(key, 10);
+    if (!set.has(n)) {
+      console.warn(
+        `[tilepage] columns.breakpoints[${key}] is not in supported [${config.supported.join(',')}]; ignored`,
+      );
+    }
+  }
 }
 
 // CSS 変数経由で flow-layer / obstacle-layer の grid-template-columns を駆動する。
@@ -201,12 +251,13 @@ export function addPage(book: Book, options: PageOptions = {}): Page {
   page.appendChild(obstacleLayer);
   book.root.appendChild(page);
 
-  // width モードでは page が DOM に乗ったタイミングで初めて inline サイズが分かる。
+  // 固定 N 以外のモードでは page が DOM に乗ったタイミングで初めて inline サイズが分かる。
   // 1 page 目作成時に N を確定させる (2 page 目以降は既に確定済の book.columns を使う)。
-  if (typeof book.columnsConfig !== 'number' && book.pages.length === 0) {
-    const n = deriveColumnsFromWidth(book, book.columnsConfig);
+  if (!isFixedNumberMode(book.columnsConfig) && book.pages.length === 0) {
+    const n = resolveColumnsForConfig(book, book.columnsConfig);
     book.columns = n;
     applyColumnsToRoot(book.root, book.columnsConfig, n);
+    book.root.dataset.activeColumns = String(n);
   }
 
   const columnElements: HTMLElement[] = [];
@@ -320,22 +371,66 @@ function syncColumnElementsTo(
   }
 }
 
-// width モードでは reflow ごとに N を再計算し、全 page の column 要素数を揃える。
-function updateColumnsForWidthMode(book: Book): void {
-  if (typeof book.columnsConfig === 'number') return;
-  const n = deriveColumnsFromWidth(book, book.columnsConfig);
-  if (n === book.columns) return;
+// viewport から現在 N を導出するモード共通の resolver。
+// 固定 N: 値そのまま / width: 段幅から実数導出 / supported: 離散スナップ。
+function resolveColumnsForConfig(book: Book, config: ColumnsConfig): number {
+  if (isFixedNumberMode(config)) return config;
+  if (isSupportedMode(config)) return deriveColumnsFromSupported(book, config);
+  return deriveColumnsFromWidth(book, config);
+}
+
+// supportedColumns + breakpoints から N を導出する。
+// 1. breakpoints の値を px に解決
+// 2. viewport inline-size >= threshold を満たすうち最大の N を選ぶ
+// 3. 該当なしなら supported の最小値にフォールバック (下スナップ)
+//
+// 比較対象は viewport 全体 (CSS の `@media (min-width: ...)` と同じ意味論)。
+// page / flow-layer の inline-size ではなく window の inline 軸サイズを使う。
+function deriveColumnsFromSupported(
+  book: Book,
+  config: { supported: number[]; breakpoints: Record<number, string> },
+): number {
+  if (config.supported.length === 0) return 1;
+  const minN = Math.min(...config.supported);
+  const win = book.root.ownerDocument.defaultView ?? window;
+  const inlineSize = book.writingMode === 'vertical-rl' ? win.innerHeight : win.innerWidth;
+  if (!Number.isFinite(inlineSize) || inlineSize <= 0) return minN;
+  // 各 supported N の threshold を px 化し、 viewport >= threshold を満たすものを集める。
+  const candidates: Array<{ n: number; px: number }> = [];
+  for (const n of config.supported) {
+    const literal = config.breakpoints[n];
+    if (literal === undefined) continue;
+    const px = resolveCssLengthToPx(book.root, literal);
+    if (!Number.isFinite(px)) continue;
+    if (inlineSize >= px) candidates.push({ n, px });
+  }
+  if (candidates.length === 0) return minN;
+  // threshold が同点なら N が大きい方を優先 (より多段に倒す)。
+  candidates.sort((a, b) => b.n - a.n);
+  return candidates[0].n;
+}
+
+// 固定 N 以外の全モードで reflow ごとに N を再計算し、全 page の column 要素数を揃える。
+function updateColumnsForViewport(book: Book): void {
+  if (isFixedNumberMode(book.columnsConfig)) return;
+  const n = resolveColumnsForConfig(book, book.columnsConfig);
+  if (n === book.columns) {
+    // N 変化なしでも root の data-active-columns は念のため同期させる。
+    book.root.dataset.activeColumns = String(n);
+    return;
+  }
   book.columns = n;
   applyColumnsToRoot(book.root, book.columnsConfig, n);
+  book.root.dataset.activeColumns = String(n);
   for (const page of book.pages) {
     syncColumnElementsTo(page.flowLayer, page.columnElements, n);
   }
 }
 
 function runDistribute(book: Book): void {
-  // width モードでは page inline サイズが変わると N が変動する。
+  // 固定 N 以外では page inline サイズが変わると N が変動する。
   // distribute 前に column 要素数を最新 viewport に合わせ直す。
-  updateColumnsForWidthMode(book);
+  updateColumnsForViewport(book);
 
   const graphemes = splitGraphemes(book._sourceText);
   const projection = axisProjection(book.writingMode);

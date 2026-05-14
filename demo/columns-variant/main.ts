@@ -2,24 +2,17 @@
 import { addFlow, addObstacle, addPage, type Book, createBook } from '../../src';
 import merosText from '../meros.txt?raw';
 
-// columns-variant demo (Sprint 5 で書き直す本番 demo の Sprint 2 RED 用 draft)。
-// supportedColumns + breakpoints + whenColumns API は Sprint 3/4 で実装される。
-// Sprint 2 時点では型エラー / runtime エラーが許容される前提で、 @ts-expect-error と
-// try/catch で「テストが構文エラーで起動すらしない」状態を避け、 必ず
-// data-ready="true" まで到達して E2E が assertion fail で RED になるようにする。
+// columns-variant demo。 supportedColumns + breakpoints + whenColumns API の動作確認。
+// whenColumns API (obstacle variant) はまだ未実装のため、 obstacle 部分は try/catch で
+// 落ちても data-ready="true" まで到達するようガードしている。
 
 const app = document.getElementById('app');
 if (!app) throw new Error('#app が見つかりません');
 
 const SOURCE_TEXT = merosText.trim();
 
-// supportedColumns + breakpoints は Sprint 3 で導入される。
-// ts レベルでは ColumnsConfig Union に存在しないため @ts-expect-error で抑制する。
-// Sprint 2 時点ではこの呼び出しは N=1 にフォールバックする (deriveColumnsFromWidth が
-// width フィールドを見つけられず NaN 経由で 1 を返す)。 Sprint 3 で正しく N が解決される。
 const book: Book = createBook({
   container: app,
-  // @ts-expect-error supportedColumns mode は Sprint 3 実装対象
   columns: {
     supported: [2, 4, 6, 8],
     breakpoints: { 8: '90em', 6: '60em', 4: '40em', 2: '0' },
@@ -34,16 +27,15 @@ function tagObstacle(el: HTMLElement | undefined, id: string): void {
   el.setAttribute('data-id', id);
 }
 
-// Sprint 2 では addObstacle(book, ...) overload も whenColumns 解決も未実装。
-// 呼び出しが throw しても data-ready は必ず立てて E2E が assertion レベルで RED に
-// 落ちるようにする。
+// addObstacle(book, { whenColumns }) overload は未実装のため、 呼び出しが throw する。
+// data-ready は必ず立てて E2E が assertion レベルで fail/pass する状態を保つ。
 function safeAddObstacleWithVariant(id: string, options: Record<string, unknown>): void {
   try {
-    // @ts-expect-error addObstacle(book, { whenColumns }) overload は Sprint 4 で追加
+    // @ts-expect-error addObstacle(book, { whenColumns }) overload は未実装
     const obs = addObstacle(book, options) as { element?: HTMLElement } | undefined;
     tagObstacle(obs?.element, id);
   } catch (_err) {
-    // Sprint 3/4 実装前は呼び出しが落ちる。 Sprint 2 では RED 観測のみが目的。
+    // 配置 API 未実装中の RED 観測用ガード。
   }
 }
 
