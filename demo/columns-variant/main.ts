@@ -1,10 +1,9 @@
 /// <reference types="vite/client" />
-import { addFlow, addObstacle, addPage, type Book, createBook } from '../../src';
+import { addFlow, addObstacle, addPage, type Book, createBook, type Obstacle } from '../../src';
 import merosText from '../meros.txt?raw';
 
-// columns-variant demo。 supportedColumns + breakpoints + whenColumns API の動作確認。
-// whenColumns API (obstacle variant) はまだ未実装のため、 obstacle 部分は try/catch で
-// 落ちても data-ready="true" まで到達するようガードしている。
+// columns-variant demo: supportedColumns + breakpoints + whenColumns API。
+// 走れメロス 3 画像を N=2/4/6/8 の variant で配置し、 graceful degradation も確認する。
 
 const app = document.getElementById('app');
 if (!app) throw new Error('#app が見つかりません');
@@ -22,80 +21,70 @@ const book: Book = createBook({
 });
 
 // 各 obstacle に data-id を持たせて E2E から個別に locator できるようにする。
-function tagObstacle(el: HTMLElement | undefined, id: string): void {
-  if (!el) return;
-  el.setAttribute('data-id', id);
-}
-
-// addObstacle(book, { whenColumns }) overload は未実装のため、 呼び出しが throw する。
-// data-ready は必ず立てて E2E が assertion レベルで fail/pass する状態を保つ。
-function safeAddObstacleWithVariant(id: string, options: Record<string, unknown>): void {
-  try {
-    // @ts-expect-error addObstacle(book, { whenColumns }) overload は未実装
-    const obs = addObstacle(book, options) as { element?: HTMLElement } | undefined;
-    tagObstacle(obs?.element, id);
-  } catch (_err) {
-    // 配置 API 未実装中の RED 観測用ガード。
-  }
+function tagObstacle(obstacle: Obstacle, id: string): void {
+  obstacle.element.setAttribute('data-id', id);
 }
 
 // 雑誌的に King の大判画像。 N=6 を意図的に省略して graceful degrade を確認する。
-safeAddObstacleWithVariant('king', {
-  shape: 'rect',
-  src: '/meros-1-king.png',
-  whenColumns: {
-    2: { page: 1, at: { col: 1, line: 1 }, cols: 2, lines: 8 },
-    4: { page: 1, at: { col: 1, line: 1 }, cols: 2, lines: 6 },
-    // 6 は意図的に省略 (graceful degrade テスト用)
-    8: { page: 1, at: { col: 1, line: 1 }, cols: 3, lines: 7 },
-  },
-});
+tagObstacle(
+  addObstacle(book, {
+    shape: 'rect',
+    src: '/meros-1-king.png',
+    whenColumns: {
+      2: { page: 1, at: { col: 1, line: 1 }, cols: 2, lines: 8 },
+      4: { page: 1, at: { col: 1, line: 1 }, cols: 2, lines: 6 },
+      8: { page: 1, at: { col: 1, line: 1 }, cols: 3, lines: 7 },
+    },
+  }),
+  'king',
+);
 
 // 走るメロス。 全 N (2/4/6/8) で variant を宣言。
-safeAddObstacleWithVariant('run', {
-  shape: 'circle',
-  src: '/meros-2-run.png',
-  whenColumns: {
-    2: { page: 1, at: { col: 1, line: 10 }, cols: 2, lines: 6 },
-    4: { page: 1, at: { col: 3, line: 3 }, cols: 2, lines: 5 },
-    6: { page: 1, at: { col: 4, line: 5 }, cols: 2, lines: 6 },
-    8: { page: 1, at: { col: 5, line: 4 }, cols: 3, lines: 6 },
-  },
-});
+tagObstacle(
+  addObstacle(book, {
+    shape: 'circle',
+    src: '/meros-2-run.png',
+    whenColumns: {
+      2: { page: 1, at: { col: 1, line: 10 }, cols: 2, lines: 6 },
+      4: { page: 1, at: { col: 3, line: 3 }, cols: 2, lines: 5 },
+      6: { page: 1, at: { col: 4, line: 5 }, cols: 2, lines: 6 },
+      8: { page: 1, at: { col: 5, line: 4 }, cols: 3, lines: 6 },
+    },
+  }),
+  'run',
+);
 
 // 再会の polygon。 page 2 に配置。
-safeAddObstacleWithVariant('reunion', {
-  shape: {
-    type: 'polygon',
-    points: [
-      [0.5, 0],
-      [1, 0.5],
-      [0.5, 1],
-      [0, 0.5],
-    ],
-  },
-  src: '/meros-3-reunion.png',
-  whenColumns: {
-    2: { page: 2, at: { col: 1, line: 1 }, cols: 2, lines: 5 },
-    4: { page: 2, at: { col: 2, line: 2 }, cols: 2, lines: 5 },
-    6: { page: 2, at: { col: 3, line: 3 }, cols: 2, lines: 6 },
-    8: { page: 2, at: { col: 4, line: 4 }, cols: 3, lines: 6 },
-  },
-});
+tagObstacle(
+  addObstacle(book, {
+    shape: {
+      type: 'polygon',
+      points: [
+        [0.5, 0],
+        [1, 0.5],
+        [0.5, 1],
+        [0, 0.5],
+      ],
+    },
+    src: '/meros-3-reunion.png',
+    whenColumns: {
+      2: { page: 2, at: { col: 1, line: 1 }, cols: 2, lines: 5 },
+      4: { page: 2, at: { col: 2, line: 2 }, cols: 2, lines: 5 },
+      6: { page: 2, at: { col: 3, line: 3 }, cols: 2, lines: 6 },
+      8: { page: 2, at: { col: 4, line: 4 }, cols: 3, lines: 6 },
+    },
+  }),
+  'reunion',
+);
 
-// page を最低 2 つは確保する (degrade テストで page=2 variant が ensure される前提)。
-try {
-  if (book.pages.length < 1) addPage(book);
-  if (book.pages.length < 2) addPage(book);
-} catch (_err) {
-  // Sprint 2 では addPage が失敗しても data-ready は立てる。
-}
+// page=2 の variant が ensure される前提のため page を 2 つ確保しておく。
+// 並びに、 N が広めの時 (N=6/8) には text overflow しにくいよう page を追加で予約しておく
+// (distribute の trimPagesAfter は obstacle を持たない page を消すので overflow したぶんは
+//  自動で page を増やしてくれる。 ここでは degrade 対応として最小限の 2 page だけ確保)。
+if (book.pages.length < 1) addPage(book);
+if (book.pages.length < 2) addPage(book);
 
-try {
-  addFlow(book, { text: SOURCE_TEXT });
-} catch (_err) {
-  // Sprint 2 RED 時点では distribute が落ちる可能性も許容。
-}
+addFlow(book, { text: SOURCE_TEXT });
 
 (
   window as unknown as { __tilepageColumnsVariant: { book: Book; sourceText: string } }

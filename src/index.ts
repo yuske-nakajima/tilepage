@@ -16,6 +16,7 @@ export {
   type ObstacleOptions,
   type Page,
   type PageOptions,
+  type WhenColumnsVariant,
   type WritingMode,
 } from './TilePage';
 export type { ObstacleShape, Point } from './utils/polygon';

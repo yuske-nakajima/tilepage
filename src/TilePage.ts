@@ -1,6 +1,7 @@
 import { axisProjection, type WritingMode } from './flow/axis';
 import { splitGraphemes } from './flow/chunk';
 import { distribute, type FlowHost, type FlowWindow } from './flow/distribute';
+import { measureLineHeight } from './flow/measure';
 import { createReflowController, type ReflowController } from './flow/reflow';
 import { injectStyles } from './styles/inject';
 import {
@@ -49,6 +50,9 @@ export interface Book {
   // addFlow が呼ばれた時点で初期化される。
   _reflow?: ReflowController;
   _observeResize: boolean;
+  // addObstacle(book, ...) で登録された whenColumns 持ち obstacle 群。
+  // N 変化時に resolveVariantsForBook で再評価され、 page 間を移動する。
+  _variantObstacles: Obstacle[];
 }
 
 export interface PageOptions {
@@ -70,8 +74,21 @@ export interface GridPos {
   row: string;
 }
 
+// 段数 N が一致した時に採用される配置 variant。
+// at.col / at.line は 1-indexed。 line は obstacle-layer の auto-fill row index。
+export interface WhenColumnsVariant {
+  page: number;
+  at: { col: number; line: number };
+  cols: number;
+  lines: number;
+}
+
 export interface ObstacleOptions {
-  at: GridPos;
+  // legacy: 物理 row 番号で配置する経路。 whenColumns 未指定時のみ有効。
+  at?: GridPos;
+  // 段数 N → variant の辞書。 現在の N に一致する variant が選ばれる。
+  // 未一致 N では obstacle が display:none で隠れる (graceful degradation)。
+  whenColumns?: Record<number, WhenColumnsVariant>;
   element?: HTMLElement;
   src?: string;
   alt?: string;
@@ -82,11 +99,16 @@ export interface ObstacleOptions {
 
 export interface Obstacle {
   element: HTMLElement;
+  // legacy at で配置された場合の grid 範囲。 whenColumns 経路では空 [0,0]。
   colRange: [number, number];
   rowRange: [number, number];
   floats: HTMLElement[];
   shapeMargin: string;
   polygon: Point[];
+  // whenColumns 経路の保持データ。 legacy at の場合は undefined。
+  whenColumns?: Record<number, WhenColumnsVariant>;
+  // whenColumns 経路で「現状どの page に居るか」を保持する。 N 変化で page を移動する。
+  currentPage?: Page;
 }
 
 export interface FlowOptions {
@@ -121,6 +143,13 @@ export function createBook(options: BookOptions = {}): Book {
   root.className = 'tilepage-book';
   const columnsConfig: ColumnsConfig = options.columns ?? 6;
   const writingMode: WritingMode = options.writingMode ?? 'horizontal-tb';
+  // vertical-rl + supportedColumns の組み合わせは line グリッドの軸 swap が
+  // 未整備のため本バージョンでは未対応。 createBook 時点で早期 throw する。
+  if (writingMode === 'vertical-rl' && isSupportedMode(columnsConfig)) {
+    throw new Error(
+      'tilepage: writingMode "vertical-rl" with supportedColumns is not supported yet',
+    );
+  }
   if (options.gutter) root.style.setProperty('--tilepage-gutter', options.gutter);
   if (options.padding) root.style.setProperty('--tilepage-padding', options.padding);
   root.dataset.writingMode = writingMode;
@@ -149,6 +178,7 @@ export function createBook(options: BookOptions = {}): Book {
     writingMode,
     _sourceText: '',
     _observeResize: options.observeResize ?? true,
+    _variantObstacles: [],
   };
 }
 
@@ -282,30 +312,37 @@ export function addPage(book: Book, options: PageOptions = {}): Page {
   return pageObj;
 }
 
-export function addObstacle(page: Page, options: ObstacleOptions): Obstacle {
-  let el: HTMLElement;
-  if (options.element) {
-    el = options.element;
-  } else if (options.src) {
-    const img = document.createElement('img');
-    img.src = options.src;
-    if (options.alt) img.alt = options.alt;
-    el = img;
-  } else {
-    el = document.createElement('div');
+// addObstacle は 2 つの呼び出し方を持つ。
+// - addObstacle(page, options): legacy 経路。 options.at の物理 row 番号で配置する。
+// - addObstacle(book, options): whenColumns 経路。 現在 N に対応する variant が
+//   選ばれ、 未一致 N では display:none で隠れる (graceful degradation)。
+export function addObstacle(page: Page, options: ObstacleOptions): Obstacle;
+export function addObstacle(book: Book, options: ObstacleOptions): Obstacle;
+export function addObstacle(target: Page | Book, options: ObstacleOptions): Obstacle {
+  if (isBook(target)) return addObstacleToBook(target, options);
+  return addObstacleToPage(target, options);
+}
+
+// 第一引数の Book / Page 判別。 Book は _variantObstacles を必ず持つ。
+function isBook(target: Page | Book): target is Book {
+  return '_variantObstacles' in target;
+}
+
+function addObstacleToPage(page: Page, options: ObstacleOptions): Obstacle {
+  if (!options.at) {
+    throw new Error('addObstacle(page, ...): options.at is required (legacy path)');
   }
-  el.classList.add('tilepage-obstacle');
+  if (options.whenColumns) {
+    throw new Error('addObstacle(page, ...): options.whenColumns must be used with book argument');
+  }
+  const el = createObstacleElement(options);
+  const polygon = normalizeShape(options.shape ?? 'rect');
+  applyClipPath(el, options.shape, polygon);
+
   const colRange = parseGridRange(options.at.col);
   const rowRange = parseGridRange(options.at.row);
   el.style.gridColumn = `${colRange[0]} / ${colRange[1]}`;
   el.style.gridRow = `${rowRange[0]} / ${rowRange[1]}`;
-
-  const polygon = normalizeShape(options.shape ?? 'rect');
-  const syncClipPath = options.syncClipPath ?? true;
-  if (syncClipPath && options.shape && options.shape !== 'rect') {
-    el.style.clipPath = shapeToClipPath(polygon);
-  }
-
   page.obstacleLayer.appendChild(el);
 
   const obstacle: Obstacle = {
@@ -329,15 +366,150 @@ export function addObstacle(page: Page, options: ObstacleOptions): Obstacle {
     );
   }
   reflowObstacles(page);
-  // obstacle 追加で stream の収容量が変わるため再分配。
-  // observeResize 有効時は controller 経由 (debounce / draining 経路に乗せる)。
-  // observeResize 無効時でも source text が既に流れていれば同期的に再分配する。
-  if (page.book._reflow) {
-    page.book._reflow.request();
-  } else if (page.book._sourceText) {
-    runDistribute(page.book);
-  }
+  triggerRedistribute(page.book);
   return obstacle;
+}
+
+function addObstacleToBook(book: Book, options: ObstacleOptions): Obstacle {
+  if (!options.whenColumns) {
+    throw new Error('addObstacle(book, ...): options.whenColumns is required');
+  }
+  if (options.at) {
+    throw new Error('addObstacle(book, ...): options.at must not be combined with whenColumns');
+  }
+  const el = createObstacleElement(options);
+  const polygon = normalizeShape(options.shape ?? 'rect');
+  applyClipPath(el, options.shape, polygon);
+  // DOM には乗せるが page は variant 解決時に決まる。 初期は detached のまま data-id 等の
+  // 検査が成り立つよう book.root の外には出さず、 まず空の data-when-columns を付ける。
+  el.dataset.whenColumns = '';
+
+  const obstacle: Obstacle = {
+    element: el,
+    colRange: [0, 0],
+    rowRange: [0, 0],
+    floats: [],
+    shapeMargin: options.shapeMargin ?? '0',
+    polygon,
+    whenColumns: options.whenColumns,
+  };
+  book._variantObstacles.push(obstacle);
+
+  if (el.tagName === 'IMG' && !(el as HTMLImageElement).complete) {
+    el.addEventListener(
+      'load',
+      () => {
+        if (obstacle.currentPage) reflowObstacles(obstacle.currentPage);
+        book._reflow?.request();
+      },
+      { once: true },
+    );
+  }
+  // 現在 N で variant を解決し、 適切な page に append する。
+  resolveVariantsForBook(book);
+  triggerRedistribute(book);
+  return obstacle;
+}
+
+// obstacle 要素 (img or div) を生成して .tilepage-obstacle class を付ける。
+function createObstacleElement(options: ObstacleOptions): HTMLElement {
+  let el: HTMLElement;
+  if (options.element) {
+    el = options.element;
+  } else if (options.src) {
+    const img = document.createElement('img');
+    img.src = options.src;
+    if (options.alt) img.alt = options.alt;
+    el = img;
+  } else {
+    el = document.createElement('div');
+  }
+  el.classList.add('tilepage-obstacle');
+  return el;
+}
+
+function applyClipPath(el: HTMLElement, shape: ObstacleShape | undefined, polygon: Point[]): void {
+  if (shape && shape !== 'rect') {
+    el.style.clipPath = shapeToClipPath(polygon);
+  }
+}
+
+// obstacle 追加 / N 変化後の stream 再分配 trigger。
+// observeResize:true は controller 経由、 false でも source text 既存なら同期的に走らせる。
+function triggerRedistribute(book: Book): void {
+  if (book._reflow) {
+    book._reflow.request();
+  } else if (book._sourceText) {
+    runDistribute(book);
+  }
+}
+
+// 現在 N に対し、 全 variant obstacle の page 配置 / grid 座標 / display を解決する。
+function resolveVariantsForBook(book: Book): void {
+  const n = book.columns;
+  for (const obstacle of book._variantObstacles) {
+    if (!obstacle.whenColumns) continue;
+    const variant = obstacle.whenColumns[n];
+    if (!variant) {
+      detachVariantObstacle(obstacle);
+      continue;
+    }
+    const targetPageIndex = variant.page - 1;
+    if (targetPageIndex < 0 || targetPageIndex >= book.pages.length) {
+      // 該当 page が未生成なら degrade (graceful)。
+      detachVariantObstacle(obstacle);
+      continue;
+    }
+    const targetPage = book.pages[targetPageIndex];
+    attachVariantObstacle(obstacle, targetPage, variant, n);
+  }
+}
+
+// variant 適用: 対象 page の obstacle-layer に move し、 grid 座標と data 属性を更新する。
+function attachVariantObstacle(
+  obstacle: Obstacle,
+  page: Page,
+  variant: WhenColumnsVariant,
+  n: number,
+): void {
+  const el = obstacle.element;
+  el.style.display = '';
+  el.style.gridColumn = `${variant.at.col} / span ${variant.cols}`;
+  el.style.gridRow = `${variant.at.line} / span ${variant.lines}`;
+  el.dataset.whenColumns = String(n);
+  // page をまたいで移動した場合、 元 page の obstacles 配列から取り除いて新 page に登録し直す。
+  if (obstacle.currentPage && obstacle.currentPage !== page) {
+    const prev = obstacle.currentPage;
+    const idx = prev.obstacles.indexOf(obstacle);
+    if (idx >= 0) prev.obstacles.splice(idx, 1);
+    for (const f of obstacle.floats) f.remove();
+    obstacle.floats.length = 0;
+  }
+  if (el.parentElement !== page.obstacleLayer) {
+    page.obstacleLayer.appendChild(el);
+  }
+  if (!page.obstacles.includes(obstacle)) {
+    page.obstacles.push(obstacle);
+  }
+  // legacy 経路の colRange / rowRange を variant 値で同期 (reflowObstacles では使われないが
+  // public な Obstacle 型の整合のため埋める)。
+  obstacle.colRange = [variant.at.col, variant.at.col + variant.cols];
+  obstacle.rowRange = [variant.at.line, variant.at.line + variant.lines];
+  obstacle.currentPage = page;
+}
+
+// variant 未定義 N の degrade 処理: display:none にし、 page から取り外す。
+function detachVariantObstacle(obstacle: Obstacle): void {
+  const el = obstacle.element;
+  el.style.display = 'none';
+  el.dataset.whenColumns = '';
+  for (const f of obstacle.floats) f.remove();
+  obstacle.floats.length = 0;
+  if (obstacle.currentPage) {
+    const idx = obstacle.currentPage.obstacles.indexOf(obstacle);
+    if (idx >= 0) obstacle.currentPage.obstacles.splice(idx, 1);
+    obstacle.currentPage = undefined;
+  }
 }
 
 // addFlow は book 単位の唯一の入口。
@@ -431,6 +603,9 @@ function runDistribute(book: Book): void {
   // 固定 N 以外では page inline サイズが変わると N が変動する。
   // distribute 前に column 要素数を最新 viewport に合わせ直す。
   updateColumnsForViewport(book);
+  // 行高は CSS Grid の auto-fill row 単位として CSS 変数で流す。 変数の値は単位なし数値で、
+  // CSS 側で calc 経由で長さ単位に変換する (src 側に長さ文字列を書かない方針)。
+  syncLineHeightVar(book);
 
   const graphemes = splitGraphemes(book._sourceText);
   const projection = axisProjection(book.writingMode);
@@ -458,9 +633,27 @@ function runDistribute(book: Book): void {
     },
   };
 
+  // variant 解決を distribute 前に走らせ、 variant obstacle を該当 page に attach する。
+  // distribute の trimPagesAfter は obstacle を持つ page を保持するため、 attach 済みなら
+  // page=2 等の variant が消えない。
+  resolveVariantsForBook(book);
   distribute(host, graphemes, projection);
+  // distribute 後に page 数が変わった場合に備えて再解決 (足りなかった page が増えていれば再 attach)。
+  resolveVariantsForBook(book);
   // 再分配で obstacle の column 内交差も変動するため、各 page の float も再計算する。
   for (const page of book.pages) reflowObstacles(page);
+}
+
+// flow-text の line-height を実測し、 book.root に CSS 変数として書き込む。
+// CSS 側で calc 経由の単位変換を行うため、 ここでは単位なし数値だけを set する。
+function syncLineHeightVar(book: Book): void {
+  if (book.pages.length === 0) return;
+  const projection = axisProjection(book.writingMode);
+  const probe = book.pages[0].flowLayer;
+  const lh = measureLineHeight(probe, projection);
+  if (!Number.isFinite(lh) || lh <= 0) return;
+  // 単位なし数値として保存する (単位は CSS 側で calc 経由で付与する)。
+  book.root.style.setProperty('--tilepage-line-height', String(lh));
 }
 
 function ensureReflowController(book: Book): void {
