@@ -37,10 +37,7 @@ function tagObstacle(el: HTMLElement | undefined, id: string): void {
 // Sprint 2 では addObstacle(book, ...) overload も whenColumns 解決も未実装。
 // 呼び出しが throw しても data-ready は必ず立てて E2E が assertion レベルで RED に
 // 落ちるようにする。
-function safeAddObstacleWithVariant(
-  id: string,
-  options: Record<string, unknown>,
-): void {
+function safeAddObstacleWithVariant(id: string, options: Record<string, unknown>): void {
   try {
     // @ts-expect-error addObstacle(book, { whenColumns }) overload は Sprint 4 で追加
     const obs = addObstacle(book, options) as { element?: HTMLElement } | undefined;
@@ -108,7 +105,8 @@ try {
   // Sprint 2 RED 時点では distribute が落ちる可能性も許容。
 }
 
-(window as unknown as { __tilepageColumnsVariant: { book: Book; sourceText: string } }).__tilepageColumnsVariant =
-  { book, sourceText: SOURCE_TEXT };
+(
+  window as unknown as { __tilepageColumnsVariant: { book: Book; sourceText: string } }
+).__tilepageColumnsVariant = { book, sourceText: SOURCE_TEXT };
 
 app.dataset.ready = 'true';
