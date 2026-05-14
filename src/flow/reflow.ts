@@ -69,29 +69,44 @@ export function createReflowController(options: ReflowOptions): ReflowController
 
   function executeReflow(): void {
     if (destroyed) return;
+    // run() が throw しても state machine が 'reflowing' で stuck しないよう、
+    // 終了処理 (state 戻し / observer 再 attach / pendingExtra ドレイン) を
+    // 必ず finally で実行する。エラーは finally 後に再 throw して呼び出し元に surface する。
+    let firstError: unknown;
     currentState = 'reflowing';
     isReflowing = true;
     try {
       run();
+    } catch (e) {
+      firstError = e;
     } finally {
       isReflowing = false;
     }
-    // reflow 後に新規 page が増減した可能性があるので再 observe
-    attachObservers();
-    if (pendingExtra) {
+    try {
+      attachObservers();
+    } catch (e) {
+      if (firstError === undefined) firstError = e;
+    }
+    if (pendingExtra && !destroyed) {
       pendingExtra = false;
       currentState = 'draining';
-      // draining: 蓄積された通知を 1 回まとめて処理する
       currentState = 'reflowing';
       isReflowing = true;
       try {
         run();
+      } catch (e) {
+        if (firstError === undefined) firstError = e;
       } finally {
         isReflowing = false;
       }
-      attachObservers();
+      try {
+        attachObservers();
+      } catch (e) {
+        if (firstError === undefined) firstError = e;
+      }
     }
     currentState = 'idle';
+    if (firstError !== undefined) throw firstError;
   }
 
   function flushNow(): void {

@@ -278,8 +278,14 @@ export function addObstacle(page: Page, options: ObstacleOptions): Obstacle {
     );
   }
   reflowObstacles(page);
-  // book に source text が流れている場合は obstacle 追加で stream の収容量が変わるため再分配。
-  page.book._reflow?.request();
+  // obstacle 追加で stream の収容量が変わるため再分配。
+  // observeResize 有効時は controller 経由 (debounce / draining 経路に乗せる)。
+  // observeResize 無効時でも source text が既に流れていれば同期的に再分配する。
+  if (page.book._reflow) {
+    page.book._reflow.request();
+  } else if (page.book._sourceText) {
+    runDistribute(page.book);
+  }
   return obstacle;
 }
 
