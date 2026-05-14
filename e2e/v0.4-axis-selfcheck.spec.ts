@@ -67,6 +67,16 @@ test.describe('v0.4 評価軸 self-check (#1〜#6)', () => {
     expect(chunkSrc).not.toMatch(/vertical-rl|horizontal-tb|writingMode\s*===/);
     expect(distributeSrc).not.toMatch(/vertical-rl|horizontal-tb|writingMode\s*===/);
 
+    // (c) addFlow に page 引数を取る overload が残っていないこと。
+    // 「each page に同じ text を duplicate」設計の根である page 単位 addFlow を撤廃する根拠。
+    const tilepageSrc = read('src/TilePage.ts');
+    const addFlowPageOverloads = tilepageSrc
+      .split('\n')
+      .filter((line) => /addFlow\s*\([^)]*\bpage\b\s*:/i.test(line));
+    expect(addFlowPageOverloads).toEqual([]);
+    // signature が Page 型を直接受けないこと
+    expect(tilepageSrc).not.toMatch(/addFlow\s*\([^)]*:\s*Page[\s,)]/);
+
     // (b) V === SOURCE の厳密一致 (V が SOURCE の整数倍なら duplicate のサインで NG)
     const ctx = await browser.newContext({ viewport: { width: 1500, height: 900 } });
     const page = await ctx.newPage();

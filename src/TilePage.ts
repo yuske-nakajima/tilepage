@@ -31,7 +31,7 @@ export interface Book {
   // book 単位の唯一の source text。duplicate せずここだけに保持する。
   _sourceText: string;
   // ResizeObserver による stream 再分配 controller。
-  // book 単位 addFlow が呼ばれた時点で初期化される。
+  // addFlow が呼ばれた時点で初期化される。
   _reflow?: ReflowController;
   _observeResize: boolean;
 }
@@ -207,34 +207,10 @@ export function addObstacle(page: Page, options: ObstacleOptions): Obstacle {
   return obstacle;
 }
 
-// addFlow は book 単位 / page 単位の 2 形態を受ける。
-// - book 単位: 連続ストリームを N 段に分配し、不足 page は内部で生成する (v0.4)
-// - page 単位: 既存 v0.1 互換。各 column に同じ text を入れる
-export function addFlow(target: Book, options: FlowOptions): void;
-export function addFlow(target: Page, options?: FlowOptions): void;
-export function addFlow(target: Book | Page, options: FlowOptions = {}): void {
-  if (isBook(target)) {
-    flowIntoBook(target, options.text ?? '');
-    return;
-  }
-  const page = target;
-  const text = options.text ?? '';
-  for (const col of page.columnElements) {
-    const flowText = col.querySelector('.tilepage-flow-text');
-    const t = flowText ?? document.createElement('div');
-    t.className = 'tilepage-flow-text';
-    t.textContent = text;
-    if (!flowText) col.appendChild(t);
-  }
-  reflowObstacles(page);
-}
-
-function isBook(t: Book | Page): t is Book {
-  return (t as Book).pages !== undefined && (t as Page).columnElements === undefined;
-}
-
-function flowIntoBook(book: Book, text: string): void {
-  book._sourceText = text;
+// addFlow は book 単位の唯一の入口。
+// 連続ストリームを N 段に分配し、不足 page は内部で生成する。
+export function addFlow(book: Book, options: FlowOptions = {}): void {
+  book._sourceText = options.text ?? '';
   runDistribute(book);
   ensureReflowController(book);
 }
@@ -249,11 +225,14 @@ function runDistribute(book: Book): void {
       while (book.pages.length <= idx) addPage(book);
     },
     trimPagesAfter: (idx: number) => {
+      // obstacle を持つ page は user が明示配置したと見做し、stream に余りが無くても保持する。
+      // これにより obstacle 入り page を起点にした demo / レイアウトが addFlow で消えない。
       while (book.pages.length > idx) {
-        const removed = book.pages.pop();
-        if (!removed) break;
-        removed.observer?.disconnect();
-        removed.element.remove();
+        const last = book.pages[book.pages.length - 1];
+        if (!last || last.obstacles.length > 0) break;
+        book.pages.pop();
+        last.observer?.disconnect();
+        last.element.remove();
       }
     },
     windowsForPage: (idx: number): ReadonlyArray<FlowWindow> => {
