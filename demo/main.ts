@@ -1,29 +1,81 @@
 /// <reference types="vite/client" />
-import { addFlow, addObstacle, addPage, createBook, VERSION } from '../src';
+import {
+  addFlow,
+  addObstacle,
+  addPage,
+  type Book,
+  createBook,
+  type Obstacle,
+  VERSION,
+} from '../src';
 import merosText from './meros.txt?raw';
+
+// root demo: supportedColumns + breakpoints + whenColumns API による走れメロス組版。
+// breakpoints は viewport >= threshold で最大 N を選ぶ離散スナップ。
+//   N=8: 90em / N=6: 60em / N=4: 40em / N=2: 0 (常に true)
+// 1em = 16px 基準で 320px=N2 / 640px=N4 / 1024px=N6 / 1440px=N8。
+// king は N=6 で意図的に variant を省略し、 graceful degradation を示す。
 
 const app = document.getElementById('app');
 if (!app) throw new Error('#app が見つかりません');
 
 const header = document.createElement('header');
 header.className = 'demo-header';
-header.textContent = `TilePage v${VERSION} — 走れメロス (太宰治, 青空文庫) を段幅 16em で自動分配`;
+header.textContent = `TilePage v${VERSION} — 走れメロス (太宰治, 青空文庫) を段数 N に応じて再配置`;
 app.appendChild(header);
 
-const book = createBook({
+export const SOURCE_TEXT = merosText.trim();
+
+const book: Book = createBook({
   container: app,
-  columns: { width: '16em' },
+  columns: {
+    supported: [2, 4, 6, 8],
+    breakpoints: { 8: '90em', 6: '60em', 4: '40em', 2: '0' },
+  },
   gutter: '0.8em',
   padding: '4em 1.5em',
 });
 
-const scenes: Array<{
-  shape: Parameters<typeof addObstacle>[1]['shape'];
-  src: string;
-}> = [
-  { shape: 'rect', src: '/meros-1-king.png' },
-  { shape: 'circle', src: '/meros-2-run.png' },
-  {
+function tagObstacle(obstacle: Obstacle, id: string): void {
+  obstacle.element.setAttribute('data-id', id);
+}
+
+// 王 (king): 雑誌的な大判画像。 N=6 のときだけ variant を省略し
+// graceful degrade (display:none) で隠れることを示す。
+tagObstacle(
+  addObstacle(book, {
+    shape: 'rect',
+    src: '/meros-1-king.png',
+    shapeMargin: '0.8em',
+    whenColumns: {
+      2: { page: 1, at: { col: 1, line: 1 }, cols: 2, lines: 8 },
+      4: { page: 1, at: { col: 1, line: 1 }, cols: 2, lines: 6 },
+      // 6: 省略 (degrade)
+      8: { page: 1, at: { col: 1, line: 1 }, cols: 3, lines: 7 },
+    },
+  }),
+  'king',
+);
+
+// 走るメロス (circle)。 全 N (2/4/6/8) で variant を宣言。
+tagObstacle(
+  addObstacle(book, {
+    shape: 'circle',
+    src: '/meros-2-run.png',
+    shapeMargin: '0.8em',
+    whenColumns: {
+      2: { page: 1, at: { col: 1, line: 10 }, cols: 2, lines: 6 },
+      4: { page: 1, at: { col: 3, line: 3 }, cols: 2, lines: 5 },
+      6: { page: 1, at: { col: 4, line: 5 }, cols: 2, lines: 6 },
+      8: { page: 1, at: { col: 5, line: 4 }, cols: 3, lines: 6 },
+    },
+  }),
+  'run',
+);
+
+// 再会 (polygon)。 page=2 に配置。
+tagObstacle(
+  addObstacle(book, {
     shape: {
       type: 'polygon',
       points: [
@@ -34,19 +86,20 @@ const scenes: Array<{
       ],
     },
     src: '/meros-3-reunion.png',
-  },
-];
-
-for (const { shape, src } of scenes) {
-  const page = addPage(book);
-  addObstacle(page, {
-    at: { col: '2-5', row: '1-3' },
-    src,
-    shape,
     shapeMargin: '0.8em',
-  });
-}
+    whenColumns: {
+      2: { page: 2, at: { col: 1, line: 1 }, cols: 2, lines: 5 },
+      4: { page: 2, at: { col: 2, line: 2 }, cols: 2, lines: 5 },
+      6: { page: 2, at: { col: 3, line: 3 }, cols: 2, lines: 6 },
+      8: { page: 2, at: { col: 4, line: 4 }, cols: 3, lines: 6 },
+    },
+  }),
+  'reunion',
+);
 
-export const SOURCE_TEXT = merosText.trim();
+// page=2 の variant がアタッチできるよう少なくとも 2 page 確保。
+// 本文が長ければ distribute 側で page が増える。
+if (book.pages.length < 1) addPage(book);
+if (book.pages.length < 2) addPage(book);
 
 addFlow(book, { text: SOURCE_TEXT });
