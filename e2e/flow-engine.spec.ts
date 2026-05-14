@@ -21,7 +21,7 @@ function buildSource(): string {
   // 一意な index を埋め込んで duplicate を文字列レベルで検出できるようにする
   const parts: string[] = [head];
   for (let i = 0; i < 24; i++) {
-    parts.push(`<§${i.toString().padStart(3, '0')}>` + para);
+    parts.push(`<§${i.toString().padStart(3, '0')}>${para}`);
   }
   parts.push(tail);
   return parts.join('');

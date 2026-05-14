@@ -5,9 +5,9 @@ import {
   type Book,
   createBook,
   type ObstacleShape,
+  type WritingMode,
 } from '../../src';
 
-type WritingMode = 'horizontal-tb' | 'vertical-rl';
 type ObstacleKind = 'none' | 'rect' | 'circle' | 'polygon';
 
 interface V04Params {
@@ -34,6 +34,17 @@ const DEFAULT_TEXT =
   'duplicate しない、px 固定をしない、visible 文字数で検証する。' +
   '英数字 mix: The quick brown fox jumps over the lazy dog 0123456789.';
 
+function computeObstacleAt(columns: number): { col: string; row: string } {
+  // 中央付近に「全幅の半分以下」のサイズで配置する (全 column を覆わない)。
+  // 1 列以上は流せる位置を残すため、 obstacle が占有する列数は columns-1 を超えないようにする。
+  if (columns <= 1) return { col: '1', row: '1' };
+  const span = Math.max(1, Math.min(columns - 1, Math.ceil(columns / 3)));
+  const start = Math.max(1, Math.floor((columns - span) / 2) + 1);
+  const endInclusive = Math.min(columns, start + span - 1);
+  const col = start === endInclusive ? `${start}` : `${start}-${endInclusive}`;
+  return { col, row: '1-2' };
+}
+
 function shapeOf(kind: ObstacleKind): ObstacleShape | null {
   switch (kind) {
     case 'rect':
@@ -55,69 +66,33 @@ function shapeOf(kind: ObstacleKind): ObstacleShape | null {
   }
 }
 
-interface CreateBookV04Options {
-  container: HTMLElement;
-  columns: number;
-  writingMode: WritingMode;
-}
-
-function createBookV04(options: CreateBookV04Options): Book {
-  // Sprint 3 で createBook({ writingMode }) を実装する想定。Sprint 2 時点では
-  // 既存 createBook に columns だけ渡し、root 要素に data-writing-mode を付与して
-  // CSS / 検証側から writing-mode を判別できるようにしておく。
-  const book = createBook({
-    container: options.container,
-    columns: options.columns,
-  });
-  book.root.dataset.writingMode = options.writingMode;
-  if (options.writingMode === 'vertical-rl') {
-    book.root.style.writingMode = 'vertical-rl';
-  }
-  return book;
-}
-
-interface AddFlowV04Options {
-  text: string;
-}
-
-function addFlowV04(book: Book, options: AddFlowV04Options): void {
-  // Sprint 3 で addFlow(book, { text }) book 単位 + 動的 page 追加を実装する想定。
-  // Sprint 2 時点では既存の page 単位 addFlow を fallback として呼ぶ。これにより
-  // text が duplicate されて V !== S になり RED で fail するはず (これが目的)。
-  if (book.pages.length === 0) {
-    addPage(book);
-  }
-  for (const p of book.pages) {
-    addFlow(p, { text: options.text });
-  }
-}
-
 function setup(): void {
   const app = document.getElementById('app');
   if (!app) throw new Error('#app not found');
 
   const params = parseQuery();
-  const book = createBookV04({
+  const book = createBook({
     container: app,
     columns: params.columns,
     writingMode: params.writingMode,
   });
 
-  const page = addPage(book);
-  page.element.dataset.writingMode = params.writingMode;
-
+  // obstacle がある場合は最初の page を先に確保して obstacle を載せる。
+  // 追加 page は addFlow 内部で必要なだけ ensurePage される。
+  // 配置は columns に応じて book の中央付近に揃え、 grid の implicit 拡張を避ける。
   const shape = shapeOf(params.obstacle);
   if (shape) {
-    addObstacle(page, {
-      at: { col: '2-4', row: '1-3' },
+    const firstPage = addPage(book);
+    const obstacleAt = computeObstacleAt(params.columns);
+    addObstacle(firstPage, {
+      at: obstacleAt,
       shape,
       shapeMargin: '0.8em',
     });
   }
 
-  addFlowV04(book, { text: params.text });
+  addFlow(book, { text: params.text });
 
-  // テスト側から book / page にアクセスできるようグローバルに公開
   (window as unknown as { __tilepageV04: { book: Book; params: V04Params } }).__tilepageV04 = {
     book,
     params,

@@ -1,3 +1,6 @@
+import { axisProjection, type WritingMode } from './flow/axis';
+import { splitGraphemes } from './flow/chunk';
+import { distribute, type FlowHost, type FlowWindow } from './flow/distribute';
 import { injectStyles } from './styles/inject';
 import {
   clipPolygonByRect,
@@ -8,17 +11,23 @@ import {
   shapeToClipPath,
 } from './utils/polygon';
 
+export type { WritingMode } from './flow/axis';
+
 export interface BookOptions {
   container?: HTMLElement;
   columns?: number;
   gutter?: string;
   padding?: string;
+  writingMode?: WritingMode;
 }
 
 export interface Book {
   root: HTMLElement;
   columns: number;
   pages: Page[];
+  writingMode: WritingMode;
+  // book 単位の唯一の source text。duplicate せずここだけに保持する。
+  _sourceText: string;
 }
 
 export interface PageOptions {
@@ -80,11 +89,13 @@ export function createBook(options: BookOptions = {}): Book {
   const root = document.createElement('div');
   root.className = 'tilepage-book';
   const columns = options.columns ?? 6;
+  const writingMode: WritingMode = options.writingMode ?? 'horizontal-tb';
   root.style.setProperty('--tilepage-columns', String(columns));
   if (options.gutter) root.style.setProperty('--tilepage-gutter', options.gutter);
   if (options.padding) root.style.setProperty('--tilepage-padding', options.padding);
+  root.dataset.writingMode = writingMode;
   if (options.container) options.container.appendChild(root);
-  return { root, columns, pages: [] };
+  return { root, columns, pages: [], writingMode, _sourceText: '' };
 }
 
 export function addPage(book: Book, options: PageOptions = {}): Page {
@@ -173,16 +184,58 @@ export function addObstacle(page: Page, options: ObstacleOptions): Obstacle {
   return obstacle;
 }
 
-export function addFlow(page: Page, options: FlowOptions = {}): void {
+// addFlow は book 単位 / page 単位の 2 形態を受ける。
+// - book 単位: 連続ストリームを N 段に分配し、不足 page は内部で生成する (v0.4)
+// - page 単位: 既存 v0.1 互換。各 column に同じ text を入れる
+export function addFlow(target: Book, options: FlowOptions): void;
+export function addFlow(target: Page, options?: FlowOptions): void;
+export function addFlow(target: Book | Page, options: FlowOptions = {}): void {
+  if (isBook(target)) {
+    flowIntoBook(target, options.text ?? '');
+    return;
+  }
+  const page = target;
   const text = options.text ?? '';
   for (const col of page.columnElements) {
     const flowText = col.querySelector('.tilepage-flow-text');
-    const target = flowText ?? document.createElement('div');
-    target.className = 'tilepage-flow-text';
-    target.textContent = text;
-    if (!flowText) col.appendChild(target);
+    const t = flowText ?? document.createElement('div');
+    t.className = 'tilepage-flow-text';
+    t.textContent = text;
+    if (!flowText) col.appendChild(t);
   }
   reflowObstacles(page);
+}
+
+function isBook(t: Book | Page): t is Book {
+  return (t as Book).pages !== undefined && (t as Page).columnElements === undefined;
+}
+
+function flowIntoBook(book: Book, text: string): void {
+  book._sourceText = text;
+  const graphemes = splitGraphemes(text);
+  const projection = axisProjection(book.writingMode);
+
+  const host: FlowHost = {
+    pageCount: () => book.pages.length,
+    ensurePage: (idx: number) => {
+      while (book.pages.length <= idx) addPage(book);
+    },
+    trimPagesAfter: (idx: number) => {
+      while (book.pages.length > idx) {
+        const removed = book.pages.pop();
+        if (!removed) break;
+        removed.observer?.disconnect();
+        removed.element.remove();
+      }
+    },
+    windowsForPage: (idx: number): ReadonlyArray<FlowWindow> => {
+      const page = book.pages[idx];
+      if (!page) return [];
+      return projection.readingOrder(page.columnElements).map((el) => ({ element: el }));
+    },
+  };
+
+  distribute(host, graphemes, projection);
 }
 
 function reflowObstacles(page: Page): void {

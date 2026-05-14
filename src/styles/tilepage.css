@@ -20,6 +20,7 @@
   inset: 0;
   display: grid;
   grid-template-columns: repeat(var(--tilepage-columns, 6), 1fr);
+  grid-template-rows: repeat(var(--tilepage-rows, 6), 1fr);
   column-gap: var(--tilepage-gutter, 1em);
   padding: var(--tilepage-padding, 2em 1.5em);
   box-sizing: border-box;
@@ -32,22 +33,28 @@
 }
 
 .tilepage-flow-layer {
-  position: relative;
+  position: absolute;
+  inset: 0;
   display: grid;
   grid-template-columns: repeat(var(--tilepage-columns, 6), 1fr);
+  grid-template-rows: 1fr;
   column-gap: var(--tilepage-gutter, 1em);
   padding: var(--tilepage-padding, 2em 1.5em);
   box-sizing: border-box;
-  width: 100%;
-  height: 100%;
   z-index: 1;
 }
 
 .tilepage-column {
   position: relative;
   overflow: hidden;
-  height: 100%;
+  block-size: 100%;
   box-sizing: border-box;
+}
+
+.tilepage-flow-text {
+  inline-size: 100%;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .tilepage-obstacle-float {

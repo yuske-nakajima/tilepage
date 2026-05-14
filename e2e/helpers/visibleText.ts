@@ -28,7 +28,16 @@ function extractVisibleText(args: { rootSelector: string | null }): VisibleTextR
   const root: HTMLElement = args.rootSelector
     ? ((document.querySelector(args.rootSelector) as HTMLElement | null) ?? document.body)
     : document.body;
-  const rootRect = root.getBoundingClientRect();
+  // root の scroll 領域全体を rect として扱う (scroll しなくても scroll で到達可能な範囲は visible)。
+  const baseRect = root.getBoundingClientRect();
+  const rootRect = {
+    left: baseRect.left,
+    top: baseRect.top,
+    right: baseRect.left + Math.max(root.scrollWidth, baseRect.width),
+    bottom: baseRect.top + Math.max(root.scrollHeight, baseRect.height),
+    width: Math.max(root.scrollWidth, baseRect.width),
+    height: Math.max(root.scrollHeight, baseRect.height),
+  };
 
   // textNode に WeakMap でユニーク ID を振り、duplicate ガードのキーに使う
   const tnIdMap = new WeakMap<Text, number>();
@@ -71,22 +80,62 @@ function extractVisibleText(args: { rootSelector: string | null }): VisibleTextR
     return list;
   };
 
+  // subpixel rendering で境界が 0.5px ほどズレることがあるため、 1px 程度の許容を持たせる。
+  const EPS = 1;
   const intersects = (
     a: { left: number; top: number; right: number; bottom: number },
     b: { left: number; top: number; right: number; bottom: number },
   ): boolean => {
-    return !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom);
+    return !(
+      a.right <= b.left - EPS ||
+      a.left >= b.right + EPS ||
+      a.bottom <= b.top - EPS ||
+      a.top >= b.bottom + EPS
+    );
   };
 
   // rect が root と全 overflow 祖先と交差していれば visible とみなす
+  // 行端で width/height=0 の rect が返ることがある (空白の collapse、行末 word break 等)。
+  // この場合 rect 自体は面積 0 だが、 left/top 点が ancestor 内なら「読める文字」として扱う。
   const isVisible = (rect: DOMRect, parentEl: Element): boolean => {
-    if (rect.width <= 0 || rect.height <= 0) return false;
+    const pointInside = (
+      r: { left: number; top: number; right: number; bottom: number },
+      x: number,
+      y: number,
+    ): boolean => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+    const zeroSize = rect.width <= 0 || rect.height <= 0;
+    if (zeroSize) {
+      if (!pointInside(rootRect, rect.left, rect.top)) return false;
+      for (const anc of overflowAncestorsOf(parentEl)) {
+        const ancRect = scrollableRectOf(anc);
+        if (!pointInside(ancRect, rect.left, rect.top)) return false;
+      }
+      return true;
+    }
     if (!intersects(rect, rootRect)) return false;
     for (const anc of overflowAncestorsOf(parentEl)) {
-      const ancRect = anc.getBoundingClientRect();
+      const ancRect = scrollableRectOf(anc);
       if (!intersects(rect, ancRect)) return false;
     }
     return true;
+  };
+
+  // 要素の scroll 領域全体を rect として返す。 overflow:auto/scroll で scroll すれば
+  // 見える領域は visible とみなすため。 overflow:hidden / clip は scroll しても見えないので
+  // scroll 領域は使わず可視 rect のみ。
+  const scrollableRectOf = (
+    el: HTMLElement,
+  ): { left: number; top: number; right: number; bottom: number } => {
+    const r = el.getBoundingClientRect();
+    const cs = window.getComputedStyle(el);
+    const canScrollX = cs.overflowX === 'auto' || cs.overflowX === 'scroll';
+    const canScrollY = cs.overflowY === 'auto' || cs.overflowY === 'scroll';
+    return {
+      left: r.left,
+      top: r.top,
+      right: r.left + (canScrollX ? Math.max(el.scrollWidth, r.width) : r.width),
+      bottom: r.top + (canScrollY ? Math.max(el.scrollHeight, r.height) : r.height),
+    };
   };
 
   // DOM walk で TextNode を列挙
