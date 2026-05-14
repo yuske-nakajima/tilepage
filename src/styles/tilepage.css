@@ -60,6 +60,7 @@
 .tilepage-column {
   position: relative;
   overflow: hidden;
+  contain: paint;
   height: 100%;
   box-sizing: border-box;
 }

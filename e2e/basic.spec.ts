@@ -62,7 +62,7 @@ test.describe('TilePage demo', () => {
     expect(firstText?.length ?? 0).toBeGreaterThan(0);
   });
 
-  test('縦書き obstacle 内部に text が overlap しない', async ({ page }) => {
+  test('縦書き rect obstacle 内部に text が overlap しない', async ({ page }) => {
     await page.setViewportSize({ width: 1900, height: 1900 });
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(800);
@@ -76,8 +76,6 @@ test.describe('TilePage demo', () => {
     const obBox = await obstacle.boundingBox();
     if (!obBox) throw new Error('obstacle not found');
 
-    // obstacle 内部を 8x8 grid でサンプリング、obstacle 自身でない要素が
-    // topmost に来る場合は overlap と判定
     let overlap = 0;
     for (let i = 1; i < 9; i++) {
       for (let j = 1; j < 9; j++) {
@@ -94,5 +92,53 @@ test.describe('TilePage demo', () => {
       }
     }
     expect(overlap).toBe(0);
+  });
+
+  test('縦書き circle obstacle の内部に text が overlap しない', async ({ page }) => {
+    await page.setViewportSize({ width: 1900, height: 1900 });
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(800);
+
+    const verticalBook = page.locator('.tilepage-book').nth(1);
+    await verticalBook.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+
+    // 縦書き 2 ページ目 (circle) にスクロール
+    const verticalPages = page.locator('.tilepage-page[data-writing-mode="vertical-rl"]');
+    await verticalPages.nth(1).scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+
+    const circlePage = verticalPages.nth(1);
+    const obstacle = circlePage.locator('.tilepage-obstacle');
+    const obBox = await obstacle.boundingBox();
+    if (!obBox) throw new Error('obstacle not found');
+
+    // 楕円内部 (r <= 0.9) を 30x30 グリッドでサンプリング
+    const cx = obBox.x + obBox.width / 2;
+    const cy = obBox.y + obBox.height / 2;
+    const rx = obBox.width / 2;
+    const ry = obBox.height / 2;
+    let overlap = 0;
+    let total = 0;
+    for (let i = 1; i < 30; i++) {
+      for (let j = 1; j < 30; j++) {
+        const x = obBox.x + (obBox.width * i) / 30;
+        const y = obBox.y + (obBox.height * j) / 30;
+        const dx = (x - cx) / rx;
+        const dy = (y - cy) / ry;
+        if (dx * dx + dy * dy > 0.81) continue;
+        total++;
+        const tag = await page.evaluate(
+          ([x, y]) => {
+            const el = document.elementFromPoint(x, y);
+            return el ? `${el.tagName}.${(el.className as string).split(' ')[0] || ''}` : 'null';
+          },
+          [x, y],
+        );
+        if (!tag.includes('obstacle')) overlap++;
+      }
+    }
+    expect(overlap).toBe(0);
+    expect(total).toBeGreaterThan(100);
   });
 });
