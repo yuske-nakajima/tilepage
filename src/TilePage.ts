@@ -101,6 +101,7 @@ export function createBook(options: BookOptions = {}): Book {
 export function addPage(book: Book, options: PageOptions = {}): Page {
   const page = document.createElement('div');
   page.className = 'tilepage-page';
+  page.dataset.writingMode = book.writingMode;
   if (options.id) page.id = options.id;
 
   const obstacleLayer = document.createElement('div');
@@ -247,6 +248,9 @@ function reflowObstacles(page: Page): void {
   const pageRect = page.element.getBoundingClientRect();
   if (pageRect.width === 0 || pageRect.height === 0) return;
 
+  const projection = axisProjection(page.book.writingMode);
+  const floatSide = projection.floatSide();
+
   for (const obstacle of page.obstacles) {
     const obRect = obstacle.element.getBoundingClientRect();
     const obstacleBox: Rect = {
@@ -272,23 +276,32 @@ function reflowObstacles(page: Page): void {
       const clipped = clipPolygonByRect(absPolygon, columnBox);
       if (clipped.length < 3) continue;
 
-      // float は段の左端・上端基準。float のサイズは clipped の bounding box の bottom まで取ると
-      // テキストが float の下まで回り込めるので、column の幅と clipped の最大 y までを使う。
-      let maxLocalY = 0;
-      for (const [, y] of clipped) {
-        const localY = y - columnBox.y;
-        if (localY > maxLocalY) maxLocalY = localY;
-      }
+      // float の物理寸法は writing-mode に応じて: block 軸方向に必要な分だけ取る。
+      // - horizontal-tb (block 軸 = 縦): height は polygon の最下端 (column 上端から)、width は column 全幅
+      // - vertical-rl   (block 軸 = 横、右→左): width は column 右端から polygon の最左端まで、 height は column 全高
+      const floatWidth =
+        floatSide === 'left'
+          ? columnBox.width
+          : columnBox.x + columnBox.width - Math.min(...clipped.map(([x]) => x));
+      const floatHeight =
+        floatSide === 'left'
+          ? Math.max(...clipped.map(([, y]) => y)) - columnBox.y
+          : columnBox.height;
 
+      // float のローカル原点は writing-mode に応じて column 内物理位置が変わる。
+      // shape-outside は float 内ローカル左上 (0,0) を原点とする物理座標。
+      const floatOriginX =
+        floatSide === 'left' ? columnBox.x : columnBox.x + columnBox.width - floatWidth;
+      const floatOriginY = columnBox.y;
       const localPoints = clipped
-        .map(([x, y]) => `${x - columnBox.x}px ${y - columnBox.y}px`)
+        .map(([x, y]) => `${x - floatOriginX}px ${y - floatOriginY}px`)
         .join(', ');
 
       const float = document.createElement('div');
       float.className = 'tilepage-obstacle-float';
-      float.style.float = 'left';
-      float.style.width = `${columnBox.width}px`;
-      float.style.height = `${maxLocalY}px`;
+      float.style.float = floatSide;
+      float.style.width = `${floatWidth}px`;
+      float.style.height = `${floatHeight}px`;
       float.style.shapeOutside = `polygon(${localPoints})`;
       float.style.shapeMargin = obstacle.shapeMargin;
 

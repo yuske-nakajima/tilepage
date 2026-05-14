@@ -13,6 +13,10 @@ export interface AxisProjection {
   inlineSizeOf(el: Element): number;
   blockSizeOf(el: Element): number;
   readingOrder<T>(windows: ReadonlyArray<T>): ReadonlyArray<T>;
+  // float を window の block-start 物理辺に寄せるための CSS 物理側。
+  // - horizontal-tb: block-start = 物理 top → float: 'left' (top に float できないので left + 高さで代用)
+  // - vertical-rl:   block-start = 物理 right → float: 'right'
+  floatSide(): 'left' | 'right';
 }
 
 function horizontalProjection(): AxisProjection {
@@ -32,6 +36,9 @@ function horizontalProjection(): AxisProjection {
     },
     readingOrder(windows) {
       return windows;
+    },
+    floatSide() {
+      return 'left';
     },
   };
 }
@@ -54,6 +61,9 @@ function verticalRlProjection(): AxisProjection {
     },
     readingOrder(windows) {
       return windows;
+    },
+    floatSide() {
+      return 'right';
     },
   };
 }

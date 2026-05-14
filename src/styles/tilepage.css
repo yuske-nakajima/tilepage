@@ -44,6 +44,17 @@
   z-index: 1;
 }
 
+/* writing-mode は layer 親 (page 直下の flow / obstacle layer) に適用する。
+   CSS Grid は writing-mode に従い軸を swap するので、 grid-template-columns で
+   宣言した N 等分は inline 軸方向 (= vertical-rl では縦) に切られ、結果として
+   N 個の横 band が並ぶ。 .tilepage-column 単体には writing-mode を当てない。 */
+.tilepage-page[data-writing-mode="vertical-rl"] .tilepage-flow-layer,
+.tilepage-page[data-writing-mode="vertical-rl"] .tilepage-obstacle-layer {
+  writing-mode: vertical-rl;
+  column-gap: 0;
+  row-gap: var(--tilepage-gutter, 1em);
+}
+
 .tilepage-column {
   position: relative;
   overflow: hidden;
