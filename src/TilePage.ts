@@ -1,6 +1,7 @@
 import { axisProjection, type WritingMode } from './flow/axis';
 import { splitGraphemes } from './flow/chunk';
 import { distribute, type FlowHost, type FlowWindow } from './flow/distribute';
+import { createReflowController, type ReflowController } from './flow/reflow';
 import { injectStyles } from './styles/inject';
 import {
   clipPolygonByRect,
@@ -19,6 +20,7 @@ export interface BookOptions {
   gutter?: string;
   padding?: string;
   writingMode?: WritingMode;
+  observeResize?: boolean;
 }
 
 export interface Book {
@@ -28,6 +30,10 @@ export interface Book {
   writingMode: WritingMode;
   // book 単位の唯一の source text。duplicate せずここだけに保持する。
   _sourceText: string;
+  // ResizeObserver による stream 再分配 controller。
+  // book 単位 addFlow が呼ばれた時点で初期化される。
+  _reflow?: ReflowController;
+  _observeResize: boolean;
 }
 
 export interface PageOptions {
@@ -95,7 +101,14 @@ export function createBook(options: BookOptions = {}): Book {
   if (options.padding) root.style.setProperty('--tilepage-padding', options.padding);
   root.dataset.writingMode = writingMode;
   if (options.container) options.container.appendChild(root);
-  return { root, columns, pages: [], writingMode, _sourceText: '' };
+  return {
+    root,
+    columns,
+    pages: [],
+    writingMode,
+    _sourceText: '',
+    _observeResize: options.observeResize ?? true,
+  };
 }
 
 export function addPage(book: Book, options: PageOptions = {}): Page {
@@ -179,9 +192,18 @@ export function addObstacle(page: Page, options: ObstacleOptions): Obstacle {
   page.obstacles.push(obstacle);
 
   if (el.tagName === 'IMG' && !(el as HTMLImageElement).complete) {
-    el.addEventListener('load', () => reflowObstacles(page), { once: true });
+    el.addEventListener(
+      'load',
+      () => {
+        reflowObstacles(page);
+        page.book._reflow?.request();
+      },
+      { once: true },
+    );
   }
   reflowObstacles(page);
+  // book に source text が流れている場合は obstacle 追加で stream の収容量が変わるため再分配。
+  page.book._reflow?.request();
   return obstacle;
 }
 
@@ -213,7 +235,12 @@ function isBook(t: Book | Page): t is Book {
 
 function flowIntoBook(book: Book, text: string): void {
   book._sourceText = text;
-  const graphemes = splitGraphemes(text);
+  runDistribute(book);
+  ensureReflowController(book);
+}
+
+function runDistribute(book: Book): void {
+  const graphemes = splitGraphemes(book._sourceText);
   const projection = axisProjection(book.writingMode);
 
   const host: FlowHost = {
@@ -237,6 +264,18 @@ function flowIntoBook(book: Book, text: string): void {
   };
 
   distribute(host, graphemes, projection);
+  // 再分配で obstacle の column 内交差も変動するため、各 page の float も再計算する。
+  for (const page of book.pages) reflowObstacles(page);
+}
+
+function ensureReflowController(book: Book): void {
+  if (!book._observeResize) return;
+  if (book._reflow) return;
+  book._reflow = createReflowController({
+    root: book.root,
+    observePages: () => book.pages.map((p) => p.element),
+    run: () => runDistribute(book),
+  });
 }
 
 function reflowObstacles(page: Page): void {
@@ -276,33 +315,48 @@ function reflowObstacles(page: Page): void {
       const clipped = clipPolygonByRect(absPolygon, columnBox);
       if (clipped.length < 3) continue;
 
-      // float の物理寸法は writing-mode に応じて: block 軸方向に必要な分だけ取る。
-      // - horizontal-tb (block 軸 = 縦): height は polygon の最下端 (column 上端から)、width は column 全幅
-      // - vertical-rl   (block 軸 = 横、右→左): width は column 右端から polygon の最左端まで、 height は column 全高
-      const floatWidth =
+      // float の論理寸法は writing-mode に応じて block 軸方向に必要な分だけ取る。
+      // - horizontal-tb (block 軸 = 縦): height は polygon の最下端まで、width は column 全幅
+      // - vertical-rl   (block 軸 = 横、右→左): width は column 右端から polygon 最左端まで、 height は column 全高
+      // 物理 px を CSS に渡さず column box に対する % で表現する (評価軸 #4)。
+      const floatWidthRatio =
         floatSide === 'left'
-          ? columnBox.width
-          : columnBox.x + columnBox.width - Math.min(...clipped.map(([x]) => x));
-      const floatHeight =
+          ? 1
+          : columnBox.width > 0
+            ? (columnBox.x + columnBox.width - Math.min(...clipped.map(([x]) => x))) /
+              columnBox.width
+            : 0;
+      const floatHeightRatio =
         floatSide === 'left'
-          ? Math.max(...clipped.map(([, y]) => y)) - columnBox.y
-          : columnBox.height;
+          ? columnBox.height > 0
+            ? (Math.max(...clipped.map(([, y]) => y)) - columnBox.y) / columnBox.height
+            : 0
+          : 1;
 
-      // float のローカル原点は writing-mode に応じて column 内物理位置が変わる。
-      // shape-outside は float 内ローカル左上 (0,0) を原点とする物理座標。
+      // float の column 内ローカル原点を column box に対する比率で得る。
+      // shape-outside は float ローカル左上 (0,0) を原点とする座標。
       const floatOriginX =
-        floatSide === 'left' ? columnBox.x : columnBox.x + columnBox.width - floatWidth;
+        floatSide === 'left' ? columnBox.x : columnBox.x + columnBox.width * (1 - floatWidthRatio);
       const floatOriginY = columnBox.y;
-      const localPoints = clipped
-        .map(([x, y]) => `${x - floatOriginX}px ${y - floatOriginY}px`)
-        .join(', ');
+      const floatWidthPx = columnBox.width * floatWidthRatio;
+      const floatHeightPx = columnBox.height * floatHeightRatio;
+      const localPoints =
+        floatWidthPx > 0 && floatHeightPx > 0
+          ? clipped
+              .map(([x, y]) => {
+                const lx = ((x - floatOriginX) / floatWidthPx) * 100;
+                const ly = ((y - floatOriginY) / floatHeightPx) * 100;
+                return `${lx.toFixed(4)}% ${ly.toFixed(4)}%`;
+              })
+              .join(', ')
+          : '';
 
       const float = document.createElement('div');
       float.className = 'tilepage-obstacle-float';
       float.style.float = floatSide;
-      float.style.width = `${floatWidth}px`;
-      float.style.height = `${floatHeight}px`;
-      float.style.shapeOutside = `polygon(${localPoints})`;
+      float.style.inlineSize = `${(floatWidthRatio * 100).toFixed(4)}%`;
+      float.style.blockSize = `${(floatHeightRatio * 100).toFixed(4)}%`;
+      if (localPoints) float.style.shapeOutside = `polygon(${localPoints})`;
       float.style.shapeMargin = obstacle.shapeMargin;
 
       col.insertBefore(float, col.firstChild);
@@ -312,6 +366,8 @@ function reflowObstacles(page: Page): void {
 }
 
 export function destroyBook(book: Book): void {
+  book._reflow?.destroy();
+  book._reflow = undefined;
   for (const page of book.pages) {
     page.observer?.disconnect();
   }
