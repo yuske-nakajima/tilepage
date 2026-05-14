@@ -3,6 +3,7 @@ import {
   addObstacle,
   addPage,
   type Book,
+  type ColumnsConfig,
   createBook,
   type ObstacleShape,
   type WritingMode,
@@ -11,7 +12,7 @@ import {
 type ObstacleKind = 'none' | 'rect' | 'circle' | 'polygon';
 
 interface V04Params {
-  columns: number;
+  columns: ColumnsConfig;
   writingMode: WritingMode;
   obstacle: ObstacleKind;
   text: string;
@@ -19,8 +20,15 @@ interface V04Params {
 
 function parseQuery(): V04Params {
   const q = new URLSearchParams(window.location.search);
-  const columnsRaw = Number.parseInt(q.get('columns') ?? '6', 10);
-  const columns = Number.isFinite(columnsRaw) && columnsRaw > 0 ? columnsRaw : 6;
+  // columnWidth が指定されていれば width モード優先。
+  const columnWidth = q.get('columnWidth');
+  let columns: ColumnsConfig;
+  if (columnWidth && columnWidth.length > 0) {
+    columns = { width: columnWidth };
+  } else {
+    const columnsRaw = Number.parseInt(q.get('columns') ?? '6', 10);
+    columns = Number.isFinite(columnsRaw) && columnsRaw > 0 ? columnsRaw : 6;
+  }
   const wmRaw = q.get('writingMode');
   const writingMode: WritingMode = wmRaw === 'vertical-rl' ? 'vertical-rl' : 'horizontal-tb';
   const obstacle = (q.get('obstacle') ?? 'none') as ObstacleKind;
@@ -83,7 +91,9 @@ function setup(): void {
   const shape = shapeOf(params.obstacle);
   if (shape) {
     const firstPage = addPage(book);
-    const obstacleAt = computeObstacleAt(params.columns);
+    // width モード時は page 作成時の book.columns (実測 N) を使う。
+    const effectiveColumns = book.columns;
+    const obstacleAt = computeObstacleAt(effectiveColumns);
     addObstacle(firstPage, {
       at: obstacleAt,
       shape,

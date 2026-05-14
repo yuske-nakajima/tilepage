@@ -14,9 +14,15 @@ import {
 
 export type { WritingMode } from './flow/axis';
 
+// 段数指定。
+// - number: 固定 N。grid-template-columns: repeat(N, 1fr)
+// - { width }: 段幅宣言。N は page inline-size から導出する。
+//   max を指定すると 1 段の上限幅 (1fr のままだと viewport をまたぐ fluid 拡張になる)。
+export type ColumnsConfig = number | { width: string; max?: string };
+
 export interface BookOptions {
   container?: HTMLElement;
-  columns?: number;
+  columns?: ColumnsConfig;
   gutter?: string;
   padding?: string;
   writingMode?: WritingMode;
@@ -25,7 +31,10 @@ export interface BookOptions {
 
 export interface Book {
   root: HTMLElement;
+  // 現在の有効段数 N (width モードでは reflow ごとに再計算される)。
   columns: number;
+  // 元の columns 指定 (固定 N か width モードかを保持する)。
+  columnsConfig: ColumnsConfig;
   pages: Page[];
   writingMode: WritingMode;
   // book 単位の唯一の source text。duplicate せずここだけに保持する。
@@ -94,21 +103,86 @@ export function createBook(options: BookOptions = {}): Book {
   injectStyles();
   const root = document.createElement('div');
   root.className = 'tilepage-book';
-  const columns = options.columns ?? 6;
+  const columnsConfig: ColumnsConfig = options.columns ?? 6;
   const writingMode: WritingMode = options.writingMode ?? 'horizontal-tb';
-  root.style.setProperty('--tilepage-columns', String(columns));
   if (options.gutter) root.style.setProperty('--tilepage-gutter', options.gutter);
   if (options.padding) root.style.setProperty('--tilepage-padding', options.padding);
   root.dataset.writingMode = writingMode;
+  // 初期 N は固定 N モードなら指定値、width モードなら 1 で開始する (後で実測して上書き)。
+  const initialColumns = typeof columnsConfig === 'number' ? columnsConfig : 1;
+  applyColumnsToRoot(root, columnsConfig, initialColumns);
   if (options.container) options.container.appendChild(root);
   return {
     root,
-    columns,
+    columns: initialColumns,
+    columnsConfig,
     pages: [],
     writingMode,
     _sourceText: '',
     _observeResize: options.observeResize ?? true,
   };
+}
+
+// CSS 変数経由で flow-layer / obstacle-layer の grid-template-columns を駆動する。
+// width モードでも実際の段数は JS で実測 N を決めるので、CSS 側は常に repeat(N, 1fr) で良い。
+// (auto-fit を CSS に投げると、子要素数と一致しない場合に collapse / 空セル化されて
+//  flow engine の window 数と一致しなくなる。よって CSS 側は実数 N に揃える。)
+function applyColumnsToRoot(root: HTMLElement, _config: ColumnsConfig, n: number): void {
+  root.style.setProperty('--tilepage-columns', String(n));
+}
+
+// width モードで現在の flow-layer inline 軸サイズから N を導出する。
+// 1. 計測には実際の flow-layer (= column が並ぶ領域) を使う。padding は除外される。
+// 2. 与えられた width / gutter を CSS 解決し pixel 化する
+// 3. N 段 = (inline - (N-1)*gutter) / width >= 1 を満たす最大 N
+// 値が壊れている (NaN / <=0) 場合は 1 段にフォールバックする。
+function deriveColumnsFromWidth(book: Book, config: { width: string; max?: string }): number {
+  // flow-layer が存在すれば inline 軸 = padding を引いた実領域。
+  // まだ無い場合は page 要素か root を見る (近似)。
+  const probe: HTMLElement = book.pages[0]?.flowLayer ?? book.pages[0]?.element ?? book.root;
+  const inlineSize = inlineSizeOfElement(probe, book.writingMode);
+  if (inlineSize <= 0) return 1;
+  const widthPx = resolveCssLengthToPx(book.root, config.width);
+  if (!Number.isFinite(widthPx) || widthPx <= 0) return 1;
+  const gutterPx = resolveCssLengthToPx(
+    book.root,
+    getComputedStyle(book.root).getPropertyValue('--tilepage-gutter').trim() || '1em',
+  );
+  const usableGutter = Number.isFinite(gutterPx) && gutterPx > 0 ? gutterPx : 0;
+  // (inline + gutter) / (width + gutter) >= N を満たす最大 N。
+  const n = Math.floor((inlineSize + usableGutter) / (widthPx + usableGutter));
+  return Math.max(1, n);
+}
+
+function inlineSizeOfElement(el: HTMLElement, writingMode: WritingMode): number {
+  // flow-layer は box-sizing: border-box + padding 持ちなので clientWidth (= 内側) ではなく
+  // 実 column 配置領域を出すため clientWidth/Height を使う (padding を除いた content + padding に近い値が要る)。
+  // CSS Grid の grid-template-columns は content + padding 内側に対して並ぶ。
+  // よって clientWidth から padding を引いた値が「並べられる inline 軸サイズ」になる。
+  const cs = getComputedStyle(el);
+  if (writingMode === 'vertical-rl') {
+    const padBlock =
+      Number.parseFloat(cs.paddingTop || '0') + Number.parseFloat(cs.paddingBottom || '0');
+    return Math.max(0, el.clientHeight - padBlock);
+  }
+  const padInline =
+    Number.parseFloat(cs.paddingLeft || '0') + Number.parseFloat(cs.paddingRight || '0');
+  return Math.max(0, el.clientWidth - padInline);
+}
+
+// "16em" / "var(--x)" 等の CSS 長さを実 pixel に解決する。
+// 一時要素を作って getBoundingClientRect で width を読み取る。
+// block-size は 0 のままで OK (width だけ知りたい)。
+function resolveCssLengthToPx(context: HTMLElement, value: string): number {
+  const probe = context.ownerDocument.createElement('div');
+  probe.style.position = 'absolute';
+  probe.style.visibility = 'hidden';
+  probe.style.pointerEvents = 'none';
+  probe.style.inlineSize = value;
+  context.appendChild(probe);
+  const px = probe.getBoundingClientRect().width;
+  probe.remove();
+  return px;
 }
 
 export function addPage(book: Book, options: PageOptions = {}): Page {
@@ -123,18 +197,20 @@ export function addPage(book: Book, options: PageOptions = {}): Page {
   const flowLayer = document.createElement('div');
   flowLayer.className = 'tilepage-flow-layer';
 
-  const columnElements: HTMLElement[] = [];
-  for (let i = 0; i < book.columns; i++) {
-    const col = document.createElement('div');
-    col.className = 'tilepage-column';
-    col.dataset.column = String(i + 1);
-    flowLayer.appendChild(col);
-    columnElements.push(col);
-  }
-
   page.appendChild(flowLayer);
   page.appendChild(obstacleLayer);
   book.root.appendChild(page);
+
+  // width モードでは page が DOM に乗ったタイミングで初めて inline サイズが分かる。
+  // 1 page 目作成時に N を確定させる (2 page 目以降は既に確定済の book.columns を使う)。
+  if (typeof book.columnsConfig !== 'number' && book.pages.length === 0) {
+    const n = deriveColumnsFromWidth(book, book.columnsConfig);
+    book.columns = n;
+    applyColumnsToRoot(book.root, book.columnsConfig, n);
+  }
+
+  const columnElements: HTMLElement[] = [];
+  syncColumnElementsTo(flowLayer, columnElements, book.columns);
 
   const pageObj: Page = {
     element: page,
@@ -215,7 +291,46 @@ export function addFlow(book: Book, options: FlowOptions = {}): void {
   ensureReflowController(book);
 }
 
+// 既存 page の column 要素群を target 数に揃える。差分のみ DOM 操作する。
+function syncColumnElementsTo(
+  flowLayer: HTMLElement,
+  columnElements: HTMLElement[],
+  target: number,
+): void {
+  while (columnElements.length < target) {
+    const col = flowLayer.ownerDocument.createElement('div');
+    col.className = 'tilepage-column';
+    col.dataset.column = String(columnElements.length + 1);
+    flowLayer.appendChild(col);
+    columnElements.push(col);
+  }
+  while (columnElements.length > target) {
+    const last = columnElements.pop();
+    last?.remove();
+  }
+  // dataset.column を再採番 (削除後にずれるため)。
+  for (let i = 0; i < columnElements.length; i++) {
+    columnElements[i].dataset.column = String(i + 1);
+  }
+}
+
+// width モードでは reflow ごとに N を再計算し、全 page の column 要素数を揃える。
+function updateColumnsForWidthMode(book: Book): void {
+  if (typeof book.columnsConfig === 'number') return;
+  const n = deriveColumnsFromWidth(book, book.columnsConfig);
+  if (n === book.columns) return;
+  book.columns = n;
+  applyColumnsToRoot(book.root, book.columnsConfig, n);
+  for (const page of book.pages) {
+    syncColumnElementsTo(page.flowLayer, page.columnElements, n);
+  }
+}
+
 function runDistribute(book: Book): void {
+  // width モードでは page inline サイズが変わると N が変動する。
+  // distribute 前に column 要素数を最新 viewport に合わせ直す。
+  updateColumnsForWidthMode(book);
+
   const graphemes = splitGraphemes(book._sourceText);
   const projection = axisProjection(book.writingMode);
 

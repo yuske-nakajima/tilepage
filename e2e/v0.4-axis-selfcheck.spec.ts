@@ -28,6 +28,20 @@ function buildUrl(params: { columns: number; writingMode: WritingMode; text: str
   return `/v0.4/?${q.toString()}`;
 }
 
+function buildWidthUrl(params: {
+  columnWidth: string;
+  writingMode: WritingMode;
+  text: string;
+}): string {
+  const q = new URLSearchParams({
+    columnWidth: params.columnWidth,
+    writingMode: params.writingMode,
+    obstacle: 'none',
+    text: params.text,
+  });
+  return `/v0.4/?${q.toString()}`;
+}
+
 test.describe('v0.4 評価軸 self-check (#1〜#6)', () => {
   test('#1 text は 1 本連続ストリーム / page 可変 / resize 再分配', async ({ browser }) => {
     // 検証手段: resize sweep で各 viewport step で V===SOURCE を満たし、page 数が変動する。
@@ -113,6 +127,35 @@ test.describe('v0.4 評価軸 self-check (#1〜#6)', () => {
           .count();
         expect(columnCount).toBe(cols);
       }
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test('#3 段幅宣言 (columns: { width }) で N は viewport から導出される', async ({ browser }) => {
+    // columnWidth=14em で viewport を 3 段階に動かすと N が単調増加すること。
+    // 各 viewport で V === SOURCE を維持。
+    const ctx = await browser.newContext({ viewport: { width: 600, height: 900 } });
+    const page = await ctx.newPage();
+    try {
+      await page.goto(
+        buildWidthUrl({ columnWidth: '14em', writingMode: 'horizontal-tb', text: SOURCE }),
+      );
+      await page.waitForSelector('#app[data-ready="true"]');
+      const counts: number[] = [];
+      for (const width of [600, 1200, 1800] as const) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.waitForTimeout(500);
+        const { text: V } = await visibleTextOf(page, { rootSelector: '.tilepage-book' });
+        expect(V, `width-mode viewport=${width}`).toBe(SOURCE);
+        const n = await page.locator('.tilepage-page').first().locator('.tilepage-column').count();
+        counts.push(n);
+      }
+      // 単調非減少 (= 増えるか同じ)。広がるほど多段になる方向。
+      expect(counts[0]).toBeLessThanOrEqual(counts[1]);
+      expect(counts[1]).toBeLessThanOrEqual(counts[2]);
+      // 600 → 1800 で少なくとも 1 段は増えていること (N が実際に動的化されている証拠)。
+      expect(counts[2]).toBeGreaterThan(counts[0]);
     } finally {
       await ctx.close();
     }

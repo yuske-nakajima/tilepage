@@ -88,3 +88,49 @@ test.describe('v0.4 flow-engine matrix (V === S)', () => {
     }
   }
 });
+
+// 段幅宣言 (auto-fit width) モードの検証。
+// width × viewport × writingMode の組み合わせで V === SOURCE が成立すること。
+const WIDTH_MODES: ReadonlyArray<string> = ['10em', '14em', '20em'];
+
+function buildWidthUrl(params: {
+  columnWidth: string;
+  writingMode: WritingMode;
+  obstacle: ObstacleKind;
+  text: string;
+}): string {
+  const q = new URLSearchParams({
+    columnWidth: params.columnWidth,
+    writingMode: params.writingMode,
+    obstacle: params.obstacle,
+    text: params.text,
+  });
+  return `/v0.4/?${q.toString()}`;
+}
+
+test.describe('v0.4 flow-engine width mode (V === S)', () => {
+  for (const viewport of VIEWPORTS) {
+    for (const writingMode of WRITING_MODES) {
+      for (const columnWidth of WIDTH_MODES) {
+        const title = `vw=${viewport.width} wm=${writingMode} width=${columnWidth}`;
+        test(title, async ({ browser }) => {
+          const ctx = await browser.newContext({ viewport });
+          const page = await ctx.newPage();
+          try {
+            await page.goto(
+              buildWidthUrl({ columnWidth, writingMode, obstacle: 'none', text: SOURCE }),
+            );
+            await page.waitForSelector('#app[data-ready="true"]');
+            await page.waitForLoadState('networkidle').catch(() => undefined);
+            await page.waitForTimeout(300);
+
+            const { text: V } = await visibleTextOf(page, { rootSelector: '.tilepage-book' });
+            expect(V).toBe(SOURCE);
+          } finally {
+            await ctx.close();
+          }
+        });
+      }
+    }
+  }
+});

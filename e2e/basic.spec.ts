@@ -21,9 +21,18 @@ test.describe('TilePage demo (走れメロス)', () => {
     expect(pageCount).toBeGreaterThanOrEqual(3);
   });
 
-  test('column 数は (page 数 × 6) に一致する', async ({ page }) => {
+  test('column 総数は page 数 × 1 page あたり column 数 に一致する', async ({ page }) => {
+    // width モードでは N が viewport で変わるため、 1 page 目の column 数を読み取り
+    // 全 page でその N が揃っていることを確認する。
     const pageCount = await page.locator('.tilepage-page').count();
-    await expect(page.locator('.tilepage-column')).toHaveCount(pageCount * 6);
+    expect(pageCount).toBeGreaterThanOrEqual(1);
+    const firstPageColumns = await page
+      .locator('.tilepage-page')
+      .first()
+      .locator('.tilepage-column')
+      .count();
+    expect(firstPageColumns).toBeGreaterThanOrEqual(1);
+    await expect(page.locator('.tilepage-column')).toHaveCount(pageCount * firstPageColumns);
   });
 
   test('3 つの obstacle (rect / circle / polygon) が配置されている', async ({ page }) => {

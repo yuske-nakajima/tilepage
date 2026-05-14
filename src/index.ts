@@ -7,6 +7,7 @@ export {
   addPage,
   type Book,
   type BookOptions,
+  type ColumnsConfig,
   createBook,
   destroyBook,
   type FlowOptions,

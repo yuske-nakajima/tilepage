@@ -7,10 +7,15 @@ if (!app) throw new Error('#app が見つかりません');
 
 const header = document.createElement('header');
 header.className = 'demo-header';
-header.textContent = `TilePage v${VERSION} — 走れメロス (太宰治, 青空文庫) を 6 段組みに流し込む`;
+header.textContent = `TilePage v${VERSION} — 走れメロス (太宰治, 青空文庫) を段幅 16em で自動分配`;
 app.appendChild(header);
 
-const book = createBook({ container: app, columns: 6, gutter: '0.8em', padding: '4em 1.5em' });
+const book = createBook({
+  container: app,
+  columns: { width: '16em' },
+  gutter: '0.8em',
+  padding: '4em 1.5em',
+});
 
 const shapes: Array<Parameters<typeof addObstacle>[1]['shape']> = [
   'rect',
