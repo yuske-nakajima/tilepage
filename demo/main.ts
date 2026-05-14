@@ -17,25 +17,31 @@ const book = createBook({
   padding: '4em 1.5em',
 });
 
-const shapes: Array<Parameters<typeof addObstacle>[1]['shape']> = [
-  'rect',
-  'circle',
+const scenes: Array<{
+  shape: Parameters<typeof addObstacle>[1]['shape'];
+  src: string;
+}> = [
+  { shape: 'rect', src: '/meros-1-king.png' },
+  { shape: 'circle', src: '/meros-2-run.png' },
   {
-    type: 'polygon',
-    points: [
-      [0.5, 0],
-      [1, 0.5],
-      [0.5, 1],
-      [0, 0.5],
-    ],
+    shape: {
+      type: 'polygon',
+      points: [
+        [0.5, 0],
+        [1, 0.5],
+        [0.5, 1],
+        [0, 0.5],
+      ],
+    },
+    src: '/meros-3-reunion.png',
   },
 ];
 
-for (const shape of shapes) {
+for (const { shape, src } of scenes) {
   const page = addPage(book);
   addObstacle(page, {
     at: { col: '2-5', row: '1-3' },
-    src: '/meros.png',
+    src,
     shape,
     shapeMargin: '0.8em',
   });
