@@ -26,35 +26,36 @@ function tagObstacle(obstacle: Obstacle, id: string): void {
 }
 
 // 雑誌的に King の大判画像。 N=6 を意図的に省略して graceful degrade を確認する。
+// lines / aspect ともに省略 → 画像 natural aspect から導出される。
 tagObstacle(
   addObstacle(book, {
     shape: 'rect',
     src: '/meros-1-king.png',
     whenColumns: {
-      2: { page: 1, at: { col: 1, line: 1 }, cols: 2, lines: 8 },
-      4: { page: 1, at: { col: 1, line: 1 }, cols: 2, lines: 6 },
-      8: { page: 1, at: { col: 1, line: 1 }, cols: 3, lines: 7 },
+      2: { page: 1, at: { col: 1, line: 1 }, cols: 2 },
+      4: { page: 1, at: { col: 1, line: 1 }, cols: 2 },
+      8: { page: 1, at: { col: 1, line: 1 }, cols: 3 },
     },
   }),
   'king',
 );
 
-// 走るメロス。 全 N (2/4/6/8) で variant を宣言。
+// 走るメロス。 全 N (2/4/6/8) で variant を宣言。 aspect '3/2' を明示。
 tagObstacle(
   addObstacle(book, {
     shape: 'circle',
     src: '/meros-2-run.png',
     whenColumns: {
-      2: { page: 1, at: { col: 1, line: 10 }, cols: 2, lines: 6 },
-      4: { page: 1, at: { col: 3, line: 3 }, cols: 2, lines: 5 },
-      6: { page: 1, at: { col: 4, line: 5 }, cols: 2, lines: 6 },
-      8: { page: 1, at: { col: 5, line: 4 }, cols: 3, lines: 6 },
+      2: { page: 1, at: { col: 1, line: 10 }, cols: 2, aspect: '3/2' },
+      4: { page: 1, at: { col: 3, line: 3 }, cols: 2, aspect: '3/2' },
+      6: { page: 1, at: { col: 4, line: 5 }, cols: 2, aspect: '3/2' },
+      8: { page: 1, at: { col: 5, line: 4 }, cols: 3, aspect: '3/2' },
     },
   }),
   'run',
 );
 
-// 再会の polygon。 page 2 に配置。
+// 再会の polygon。 page 2 に配置。 aspect '3/2' を明示。
 tagObstacle(
   addObstacle(book, {
     shape: {
@@ -68,10 +69,10 @@ tagObstacle(
     },
     src: '/meros-3-reunion.png',
     whenColumns: {
-      2: { page: 2, at: { col: 1, line: 1 }, cols: 2, lines: 5 },
-      4: { page: 2, at: { col: 2, line: 2 }, cols: 2, lines: 5 },
-      6: { page: 2, at: { col: 3, line: 3 }, cols: 2, lines: 6 },
-      8: { page: 2, at: { col: 4, line: 4 }, cols: 3, lines: 6 },
+      2: { page: 2, at: { col: 1, line: 1 }, cols: 2, aspect: '3/2' },
+      4: { page: 2, at: { col: 2, line: 2 }, cols: 2, aspect: '3/2' },
+      6: { page: 2, at: { col: 3, line: 3 }, cols: 2, aspect: '3/2' },
+      8: { page: 2, at: { col: 4, line: 4 }, cols: 3, aspect: '3/2' },
     },
   }),
   'reunion',

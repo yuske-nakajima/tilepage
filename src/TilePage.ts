@@ -76,11 +76,18 @@ export interface GridPos {
 
 // 段数 N が一致した時に採用される配置 variant。
 // at.col / at.line は 1-indexed。 line は obstacle-layer の auto-fill row index。
+// lines / aspect の解決優先順位:
+//   1. aspect 指定あり → cols から lines を導出 (lines も指定されていれば warn して aspect 優先)
+//   2. aspect 未指定で lines 指定 → そのまま
+//   3. 両方未指定 → 画像 natural aspect (img.naturalWidth / img.naturalHeight) から導出
+//      画像以外 / natural が取れない場合は FALLBACK_LINES (= 4)
 export interface WhenColumnsVariant {
   page: number;
   at: { col: number; line: number };
   cols: number;
-  lines: number;
+  lines?: number;
+  // 'W/H' (例: '3/4', '16/9')。 W, H は正の数値文字列。 パース失敗は warn して未指定扱い。
+  aspect?: string;
 }
 
 export interface ObstacleOptions {
@@ -399,6 +406,9 @@ function addObstacleToBook(book: Book, options: ObstacleOptions): Obstacle {
     el.addEventListener(
       'load',
       () => {
+        // 画像ロード後は natural aspect が取れるので variant を解決し直す。
+        // resolveVariantsForBook 経由で grid-row span が更新され、 reflow も連動する。
+        resolveVariantsForBook(book);
         if (obstacle.currentPage) reflowObstacles(obstacle.currentPage);
         book._reflow?.request();
       },
@@ -465,6 +475,111 @@ function resolveVariantsForBook(book: Book): void {
   }
 }
 
+// aspect 未解決時のフォールバック行数。 画像 natural aspect が取れない / 画像以外の DOM 用。
+const FALLBACK_LINES = 4;
+
+// 'W/H' を { w, h } にパース。 失敗時は undefined。
+function parseAspect(aspect: string): { w: number; h: number } | undefined {
+  const m = aspect.match(/^\s*(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*$/);
+  if (!m) return undefined;
+  const w = Number.parseFloat(m[1]);
+  const h = Number.parseFloat(m[2]);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return undefined;
+  return { w, h };
+}
+
+interface ResolveLinesContext {
+  // cell の inline 軸 size を構成する 1 段あたりの実 px と、 段間 gap の実 px。
+  // cellWidth = cols * columnWidthPx + (cols - 1) * gutterPx
+  columnWidthPx: number;
+  gutterPx: number;
+  lineHeightPx: number;
+  // 画像要素なら naturalWidth/Height を渡す。 未ロード / 画像以外なら undefined。
+  imgIntrinsic?: { w: number; h: number };
+}
+
+// variant.aspect / variant.lines / 画像 natural aspect の優先順位で行数を決定する。
+// 戻り値は常に >= 1 の整数。
+function resolveLines(variant: WhenColumnsVariant, ctx: ResolveLinesContext): number {
+  const cellWidth = variant.cols * ctx.columnWidthPx + (variant.cols - 1) * ctx.gutterPx;
+  // 1. aspect 指定あり → cols から lines を導出。
+  if (variant.aspect !== undefined) {
+    const parsed = parseAspect(variant.aspect);
+    if (parsed) {
+      if (variant.lines !== undefined) {
+        console.warn(
+          `[tilepage] WhenColumnsVariant: both 'aspect' (${variant.aspect}) and 'lines' (${variant.lines}) given; 'aspect' is preferred`,
+        );
+      }
+      if (ctx.lineHeightPx > 0 && cellWidth > 0) {
+        const cellHeight = (cellWidth * parsed.h) / parsed.w;
+        return Math.max(1, Math.round(cellHeight / ctx.lineHeightPx));
+      }
+    } else {
+      console.warn(
+        `[tilepage] WhenColumnsVariant: invalid aspect '${variant.aspect}'; expected 'W/H' (e.g. '3/4'). Falling back to 'lines' or natural aspect.`,
+      );
+    }
+  }
+  // 2. lines 指定 → そのまま。
+  if (variant.lines !== undefined && variant.lines >= 1) {
+    return Math.max(1, Math.floor(variant.lines));
+  }
+  // 3. 画像 natural aspect 経由。
+  if (ctx.imgIntrinsic && ctx.lineHeightPx > 0 && cellWidth > 0) {
+    const cellHeight = (cellWidth * ctx.imgIntrinsic.h) / ctx.imgIntrinsic.w;
+    return Math.max(1, Math.round(cellHeight / ctx.lineHeightPx));
+  }
+  // 4. 画像未ロード or 画像以外。 fallback でとりあえず描画させる。
+  return FALLBACK_LINES;
+}
+
+// 要素から ResolveLinesContext を組み立てる。 px の生成元は computed style のみで、
+// JS 内に物理長リテラルを書かない (評価軸 #4)。
+function buildResolveLinesContext(book: Book, page: Page): ResolveLinesContext {
+  const probe = page.flowLayer;
+  const cs = getComputedStyle(probe);
+  const projection = axisProjection(book.writingMode);
+  // 1 column の inline 軸 size = 全段の inline / N。 padding は除外。
+  const inlineSize = inlineSizeOfElement(probe, book.writingMode);
+  const gutterPx = resolveCssLengthToPx(
+    book.root,
+    cs.getPropertyValue('--tilepage-gutter').trim() || '1em',
+  );
+  const safeGutter = Number.isFinite(gutterPx) && gutterPx > 0 ? gutterPx : 0;
+  const n = Math.max(1, book.columns);
+  // N 段 + (N-1) gap = inlineSize  ⇒  columnWidth = (inlineSize - (N-1)*gutter) / N
+  const columnWidthPx = Math.max(0, (inlineSize - (n - 1) * safeGutter) / n);
+  // line-height: 単位なし数値が --tilepage-line-height に書き込まれている。 fallback で flow-text を実測。
+  const lhVar = Number.parseFloat(cs.getPropertyValue('--tilepage-line-height').trim());
+  const lineHeightPx =
+    Number.isFinite(lhVar) && lhVar > 0 ? lhVar : measureLineHeight(probe, projection);
+  return {
+    columnWidthPx,
+    gutterPx: safeGutter,
+    lineHeightPx,
+    // imgIntrinsic は呼び出し側で obstacle ごとに付与する。
+  };
+}
+
+// 内部 helper のテスト用エクスポート。 公開 API ではない (`_` prefix)。
+export const _internalAspect = {
+  parseAspect,
+  resolveLines,
+  FALLBACK_LINES,
+};
+
+// 画像 element から naturalWidth/Height を取り出す。 未ロード or 画像でない場合 undefined。
+function getImgIntrinsic(el: HTMLElement): { w: number; h: number } | undefined {
+  if (el.tagName !== 'IMG') return undefined;
+  const img = el as HTMLImageElement;
+  if (!img.complete) return undefined;
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return undefined;
+  return { w, h };
+}
+
 // variant 適用: 対象 page の obstacle-layer に move し、 grid 座標と data 属性を更新する。
 function attachVariantObstacle(
   obstacle: Obstacle,
@@ -475,7 +590,12 @@ function attachVariantObstacle(
   const el = obstacle.element;
   el.style.display = '';
   el.style.gridColumn = `${variant.at.col} / span ${variant.cols}`;
-  el.style.gridRow = `${variant.at.line} / span ${variant.lines}`;
+  const baseCtx = buildResolveLinesContext(page.book, page);
+  const resolvedLines = resolveLines(variant, {
+    ...baseCtx,
+    imgIntrinsic: getImgIntrinsic(el),
+  });
+  el.style.gridRow = `${variant.at.line} / span ${resolvedLines}`;
   el.dataset.whenColumns = String(n);
   // page をまたいで移動した場合、 元 page の obstacles 配列から取り除いて新 page に登録し直す。
   if (obstacle.currentPage && obstacle.currentPage !== page) {
@@ -494,7 +614,7 @@ function attachVariantObstacle(
   // legacy 経路の colRange / rowRange を variant 値で同期 (reflowObstacles では使われないが
   // public な Obstacle 型の整合のため埋める)。
   obstacle.colRange = [variant.at.col, variant.at.col + variant.cols];
-  obstacle.rowRange = [variant.at.line, variant.at.line + variant.lines];
+  obstacle.rowRange = [variant.at.line, variant.at.line + resolvedLines];
   obstacle.currentPage = page;
 }
 

@@ -29,27 +29,28 @@ const CASES: ReadonlyArray<{
   { width: 1440, height: 900, expectedN: 8 },
 ];
 
-// demo/columns-variant/main.ts の whenColumns 宣言と同期。
+// demo/columns-variant/main.ts の whenColumns 宣言と同期 (起点座標のみ)。
+// lines は aspect / natural aspect から動的に決まるので assertion 対象外。
 // 「king」は N=6 を意図的に省略。 graceful degrade のテスト対象。
-type VariantSpec = { col: number; line: number; cols: number; lines: number };
+type VariantSpec = { col: number; line: number; cols: number };
 const EXPECTED_PLACEMENT: Record<string, Record<number, VariantSpec | null>> = {
   king: {
-    2: { col: 1, line: 1, cols: 2, lines: 8 },
-    4: { col: 1, line: 1, cols: 2, lines: 6 },
+    2: { col: 1, line: 1, cols: 2 },
+    4: { col: 1, line: 1, cols: 2 },
     6: null, // 意図的に省略 → display:none / 非存在
-    8: { col: 1, line: 1, cols: 3, lines: 7 },
+    8: { col: 1, line: 1, cols: 3 },
   },
   run: {
-    2: { col: 1, line: 10, cols: 2, lines: 6 },
-    4: { col: 3, line: 3, cols: 2, lines: 5 },
-    6: { col: 4, line: 5, cols: 2, lines: 6 },
-    8: { col: 5, line: 4, cols: 3, lines: 6 },
+    2: { col: 1, line: 10, cols: 2 },
+    4: { col: 3, line: 3, cols: 2 },
+    6: { col: 4, line: 5, cols: 2 },
+    8: { col: 5, line: 4, cols: 3 },
   },
   reunion: {
-    2: { col: 1, line: 1, cols: 2, lines: 5 },
-    4: { col: 2, line: 2, cols: 2, lines: 5 },
-    6: { col: 3, line: 3, cols: 2, lines: 6 },
-    8: { col: 4, line: 4, cols: 3, lines: 6 },
+    2: { col: 1, line: 1, cols: 2 },
+    4: { col: 2, line: 2, cols: 2 },
+    6: { col: 3, line: 3, cols: 2 },
+    8: { col: 4, line: 4, cols: 3 },
   },
 };
 
