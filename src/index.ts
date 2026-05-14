@@ -7,6 +7,7 @@ export {
   addPage,
   type Book,
   type BookOptions,
+  type ColumnsConfig,
   createBook,
   destroyBook,
   type FlowOptions,
@@ -15,5 +16,6 @@ export {
   type ObstacleOptions,
   type Page,
   type PageOptions,
+  type WritingMode,
 } from './TilePage';
 export type { ObstacleShape, Point } from './utils/polygon';

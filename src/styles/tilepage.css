@@ -20,6 +20,7 @@
   inset: 0;
   display: grid;
   grid-template-columns: repeat(var(--tilepage-columns, 6), 1fr);
+  grid-template-rows: repeat(var(--tilepage-rows, 6), 1fr);
   column-gap: var(--tilepage-gutter, 1em);
   padding: var(--tilepage-padding, 2em 1.5em);
   box-sizing: border-box;
@@ -32,22 +33,39 @@
 }
 
 .tilepage-flow-layer {
-  position: relative;
+  position: absolute;
+  inset: 0;
   display: grid;
   grid-template-columns: repeat(var(--tilepage-columns, 6), 1fr);
+  grid-template-rows: 1fr;
   column-gap: var(--tilepage-gutter, 1em);
   padding: var(--tilepage-padding, 2em 1.5em);
   box-sizing: border-box;
-  width: 100%;
-  height: 100%;
   z-index: 1;
+}
+
+/* writing-mode は layer 親 (page 直下の flow / obstacle layer) に適用する。
+   CSS Grid は writing-mode に従い軸を swap するので、 grid-template-columns で
+   宣言した N 等分は inline 軸方向 (= vertical-rl では縦) に切られ、結果として
+   N 個の横 band が並ぶ。 .tilepage-column 単体には writing-mode を当てない。 */
+.tilepage-page[data-writing-mode="vertical-rl"] .tilepage-flow-layer,
+.tilepage-page[data-writing-mode="vertical-rl"] .tilepage-obstacle-layer {
+  writing-mode: vertical-rl;
+  column-gap: 0;
+  row-gap: var(--tilepage-gutter, 1em);
 }
 
 .tilepage-column {
   position: relative;
   overflow: hidden;
-  height: 100%;
+  block-size: 100%;
   box-sizing: border-box;
+}
+
+.tilepage-flow-text {
+  inline-size: 100%;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .tilepage-obstacle-float {

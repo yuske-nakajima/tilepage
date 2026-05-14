@@ -9,7 +9,8 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   webServer: {
-    command: 'pnpm run dev',
+    // 大きなクエリ文字列で text を投入するため Node の HTTP ヘッダ上限を引き上げる
+    command: 'node --max-http-header-size=131072 ./node_modules/vite/bin/vite.js',
     url: 'http://localhost:5173',
     reuseExistingServer: true,
   },
