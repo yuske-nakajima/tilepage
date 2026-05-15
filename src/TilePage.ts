@@ -457,6 +457,7 @@ function triggerRedistribute(book: Book): void {
 // 現在 N に対し、 全 variant obstacle の page 配置 / grid 座標 / display を解決する。
 function resolveVariantsForBook(book: Book): void {
   const n = book.columns;
+  const pageCount = book.pages.length;
   for (const obstacle of book._variantObstacles) {
     if (!obstacle.whenColumns) continue;
     const variant = obstacle.whenColumns[n];
@@ -464,14 +465,22 @@ function resolveVariantsForBook(book: Book): void {
       detachVariantObstacle(obstacle);
       continue;
     }
-    const targetPageIndex = variant.page - 1;
-    if (targetPageIndex < 0 || targetPageIndex >= book.pages.length) {
-      // 該当 page が未生成なら degrade (graceful)。
+    // page を [1, pageCount] に clamp する。pageCount === 0 ならアタッチ不能なので degrade。
+    if (pageCount === 0) {
       detachVariantObstacle(obstacle);
       continue;
     }
-    const targetPage = book.pages[targetPageIndex];
-    attachVariantObstacle(obstacle, targetPage, variant, n);
+    const pageReasons: string[] = [];
+    let resolvedPage = variant.page;
+    if (resolvedPage < 1) {
+      pageReasons.push(`page:${variant.page}->1`);
+      resolvedPage = 1;
+    } else if (resolvedPage > pageCount) {
+      pageReasons.push(`page:${variant.page}->${pageCount}`);
+      resolvedPage = pageCount;
+    }
+    const targetPage = book.pages[resolvedPage - 1];
+    attachVariantObstacle(obstacle, targetPage, variant, n, pageReasons);
   }
 }
 
@@ -581,22 +590,60 @@ function getImgIntrinsic(el: HTMLElement): { w: number; h: number } | undefined 
 }
 
 // variant 適用: 対象 page の obstacle-layer に move し、 grid 座標と data 属性を更新する。
+// 範囲外の at.col / at.line / cols / lines / page は clamp し、 発生理由を element.dataset と
+// console.warn に残す。
 function attachVariantObstacle(
   obstacle: Obstacle,
   page: Page,
   variant: WhenColumnsVariant,
   n: number,
+  pageReasons: ReadonlyArray<string> = [],
 ): void {
   const el = obstacle.element;
   el.style.display = '';
-  el.style.gridColumn = `${variant.at.col} / span ${variant.cols}`;
   const baseCtx = buildResolveLinesContext(page.book, page);
   const resolvedLines = resolveLines(variant, {
     ...baseCtx,
     imgIntrinsic: getImgIntrinsic(el),
   });
-  el.style.gridRow = `${variant.at.line} / span ${resolvedLines}`;
+  const projection = axisProjection(page.book.writingMode);
+  // obstacle-layer の content area (padding を引いた領域) を基準に maxLines を出す。
+  // padding は createBook の宣言値が CSS 変数経由で obstacle-layer に効いている。
+  // padding 込みで計算すると clamp が page 端まで占有して余白がなくなるため、 logical
+  // padding-block を引いた content 領域で「下辺を maxLine に合わせる」挙動にする。
+  const layerCs = getComputedStyle(page.obstacleLayer);
+  const padBlockStart = Number.parseFloat(layerCs.paddingBlockStart) || 0;
+  const padBlockEnd = Number.parseFloat(layerCs.paddingBlockEnd) || 0;
+  const layerBlockSize = projection.blockSizeOf(page.obstacleLayer);
+  const contentBlockSize = Math.max(0, layerBlockSize - padBlockStart - padBlockEnd);
+  const maxLines =
+    baseCtx.lineHeightPx > 0 && contentBlockSize > 0
+      ? Math.max(1, Math.floor(contentBlockSize / baseCtx.lineHeightPx))
+      : Number.POSITIVE_INFINITY;
+  const clamped = clampVariantPlacement(variant, resolvedLines, n, maxLines);
+  el.style.gridColumn = `${clamped.col} / span ${clamped.cols}`;
+  el.style.gridRow = `${clamped.line} / span ${clamped.lines}`;
   el.dataset.whenColumns = String(n);
+  const allReasons = [...pageReasons, ...clamped.reasons];
+  if (allReasons.length > 0) {
+    el.dataset.clampReasons = allReasons.join(',');
+    console.warn('[tilepage] variant clamped', {
+      obstacleId: el.dataset.id ?? el.id ?? '(unnamed)',
+      n,
+      declared: variant,
+      resolved: {
+        page:
+          pageReasons.find((r) => r.startsWith('page:'))?.split('->')[1] ?? String(variant.page),
+        col: clamped.col,
+        line: clamped.line,
+        cols: clamped.cols,
+        lines: clamped.lines,
+      },
+      reasons: allReasons,
+    });
+  } else if (el.dataset.clampReasons !== undefined) {
+    delete el.dataset.clampReasons;
+  }
   // page をまたいで移動した場合、 元 page の obstacles 配列から取り除いて新 page に登録し直す。
   if (obstacle.currentPage && obstacle.currentPage !== page) {
     const prev = obstacle.currentPage;
@@ -611,11 +658,57 @@ function attachVariantObstacle(
   if (!page.obstacles.includes(obstacle)) {
     page.obstacles.push(obstacle);
   }
-  // legacy 経路の colRange / rowRange を variant 値で同期 (reflowObstacles では使われないが
-  // public な Obstacle 型の整合のため埋める)。
-  obstacle.colRange = [variant.at.col, variant.at.col + variant.cols];
-  obstacle.rowRange = [variant.at.line, variant.at.line + resolvedLines];
+  // legacy 経路の colRange / rowRange を clamp 後の値で同期する。
+  obstacle.colRange = [clamped.col, clamped.col + clamped.cols];
+  obstacle.rowRange = [clamped.line, clamped.line + clamped.lines];
   obstacle.currentPage = page;
+}
+
+// at.col / at.line / cols / lines を [1, max] に clamp する。
+// 下辺 / 右端を max に合わせる方向で line / col の起点を引き戻すので、 over 宣言時に
+// 画像の底 (block-end) と右端 (inline-end) が page / column の最大値に揃う。
+function clampVariantPlacement(
+  variant: WhenColumnsVariant,
+  resolvedLines: number,
+  n: number,
+  maxLines: number,
+): { col: number; line: number; cols: number; lines: number; reasons: string[] } {
+  const reasons: string[] = [];
+  let cols = variant.cols;
+  if (cols < 1) {
+    reasons.push(`cols:${variant.cols}->1`);
+    cols = 1;
+  } else if (cols > n) {
+    reasons.push(`cols:${variant.cols}->${n}`);
+    cols = n;
+  }
+  let col = variant.at.col;
+  if (col < 1) {
+    reasons.push(`at.col:${variant.at.col}->1`);
+    col = 1;
+  } else if (col + cols - 1 > n) {
+    const next = Math.max(1, n - cols + 1);
+    reasons.push(`at.col:${variant.at.col}->${next}`);
+    col = next;
+  }
+  let lines = resolvedLines;
+  if (lines < 1) {
+    reasons.push(`lines:${resolvedLines}->1`);
+    lines = 1;
+  } else if (Number.isFinite(maxLines) && lines > maxLines) {
+    reasons.push(`lines:${resolvedLines}->${maxLines}`);
+    lines = maxLines;
+  }
+  let line = variant.at.line;
+  if (line < 1) {
+    reasons.push(`at.line:${variant.at.line}->1`);
+    line = 1;
+  } else if (Number.isFinite(maxLines) && line + lines - 1 > maxLines) {
+    const next = Math.max(1, maxLines - lines + 1);
+    reasons.push(`at.line:${variant.at.line}->${next}`);
+    line = next;
+  }
+  return { col, line, cols, lines, reasons };
 }
 
 // variant 未定義 N の degrade 処理: display:none にし、 page から取り外す。
@@ -792,6 +885,13 @@ function reflowObstacles(page: Page): void {
     obstacle.floats.length = 0;
   }
 
+  // line-height は CSS 変数で book.root に保持されている。 column 底に 1 行未満の
+  // residual が残ると text が overflow:hidden で滲み出すため、 float の block-size を
+  // 延長して埋めるのに使う。
+  const rootCs = getComputedStyle(page.book.root);
+  const lhVar = Number.parseFloat(rootCs.getPropertyValue('--tilepage-line-height').trim());
+  const lineHeightPx = Number.isFinite(lhVar) && lhVar > 0 ? lhVar : 0;
+
   const pageRect = page.element.getBoundingClientRect();
   if (pageRect.width === 0 || pageRect.height === 0) return;
 
@@ -834,10 +934,16 @@ function reflowObstacles(page: Page): void {
             ? (columnBox.x + columnBox.width - Math.min(...clipped.map(([x]) => x))) /
               columnBox.width
             : 0;
+      // 横書きでは polygon 最下端まで取る。 1 行に満たない column 底側の residual は
+      // margin-block-end で埋めて text の overflow:hidden クリップ滲み出しを防ぐ。
+      const polygonBottomY = Math.max(...clipped.map(([, y]) => y));
+      const columnBottomY = columnBox.y + columnBox.height;
+      const residualBottom = columnBottomY - polygonBottomY;
+      const fillResidual = lineHeightPx > 0 && residualBottom > 0 && residualBottom < lineHeightPx;
       const floatHeightRatio =
         floatSide === 'left'
           ? columnBox.height > 0
-            ? (Math.max(...clipped.map(([, y]) => y)) - columnBox.y) / columnBox.height
+            ? (polygonBottomY - columnBox.y) / columnBox.height
             : 0
           : 1;
 
@@ -869,6 +975,19 @@ function reflowObstacles(page: Page): void {
 
       col.insertBefore(float, col.firstChild);
       obstacle.floats.push(float);
+
+      if (fillResidual) {
+        // 1 行に満たない column 底側の隙間を二つ目の float で完全に埋める。
+        // shape-outside を持たない素の矩形 float がスタックされ、 text が滲み込む余地を消す。
+        // float の直後 (= 下) に挿入することで block-flow 順を保つ。
+        const spacer = document.createElement('div');
+        spacer.className = 'tilepage-obstacle-float';
+        spacer.style.float = floatSide;
+        spacer.style.inlineSize = '100%';
+        spacer.style.blockSize = `${((residualBottom / columnBox.height) * 100).toFixed(4)}%`;
+        col.insertBefore(spacer, float.nextSibling);
+        obstacle.floats.push(spacer);
+      }
     }
   }
 }
