@@ -30,9 +30,9 @@ const book: Book = createBook({
   container: app,
   columns: {
     supported: [2, 4, 6, 8],
-    breakpoints: { 8: '90em', 6: '60em', 4: '40em', 2: '0' },
+    breakpoints: { 8: '120em', 6: '80em', 4: '60em', 2: '0' },
   },
-  gutter: '0.8em',
+  gutter: '1.5em',
   padding: '4em 1.5em',
 });
 
@@ -51,8 +51,8 @@ tagObstacle(
     whenColumns: {
       2: { page: 1, at: { col: 1, line: 1 }, cols: 2 },
       4: { page: 1, at: { col: 1, line: 1 }, cols: 2 },
-      // 6: 省略 (degrade)
-      8: { page: 1, at: { col: 1, line: 1 }, cols: 3 },
+      6: { page: 1, at: { col: 1, line: 1 }, cols: 3 },
+      8: { page: 1, at: { col: 1, line: 1 }, cols: 4 },
     },
   }),
   'king',
@@ -66,10 +66,10 @@ tagObstacle(
     src: '/meros-2-run.png',
     shapeMargin: '0.8em',
     whenColumns: {
-      2: { page: 1, at: { col: 1, line: 10 }, cols: 2, aspect: '3/2' },
-      4: { page: 1, at: { col: 3, line: 3 }, cols: 2, aspect: '3/2' },
-      6: { page: 1, at: { col: 4, line: 5 }, cols: 2, aspect: '3/2' },
-      8: { page: 1, at: { col: 5, line: 4 }, cols: 3, aspect: '3/2' },
+      2: { page: 4, at: { col: 1, line: 4 }, cols: 1, aspect: '3/2' },
+      4: { page: 2, at: { col: 3, line: 3 }, cols: 2, aspect: '3/2' },
+      6: { page: 2, at: { col: 4, line: 5 }, cols: 3, aspect: '3/2' },
+      8: { page: 2, at: { col: 5, line: 5 }, cols: 4, aspect: '3/2' },
     },
   }),
   'run',
@@ -87,13 +87,14 @@ tagObstacle(
         [0, 0.5],
       ],
     },
+    // shape: 'rect',
     src: '/meros-3-reunion.png',
     shapeMargin: '0.8em',
     whenColumns: {
-      2: { page: 2, at: { col: 1, line: 1 }, cols: 2, aspect: '3/2' },
-      4: { page: 2, at: { col: 2, line: 2 }, cols: 2, aspect: '3/2' },
-      6: { page: 2, at: { col: 3, line: 3 }, cols: 2, aspect: '3/2' },
-      8: { page: 2, at: { col: 4, line: 4 }, cols: 3, aspect: '3/2' },
+      2: { page: 5, at: { col: 2, line: 1 }, cols: 1, aspect: '3/2' },
+      4: { page: 4, at: { col: 2, line: 2 }, cols: 2, aspect: '3/2' },
+      6: { page: 3, at: { col: 3, line: 14 }, cols: 3, aspect: '3/2' },
+      8: { page: 3, at: { col: 1, line: 10 }, cols: 4, aspect: '3/2' },
     },
   }),
   'reunion',
