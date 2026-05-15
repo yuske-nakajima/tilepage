@@ -88,6 +88,13 @@ export interface WhenColumnsVariant {
   lines?: number;
   // 'W/H' (例: '3/4', '16/9')。 W, H は正の数値文字列。 パース失敗は warn して未指定扱い。
   aspect?: string;
+  // grid cell の inline 軸 (cols × col-width) に対する画像の幅比率 (0 < x <= 1)。
+  // 1 未満で部分幅となり、 残りの inline 空間に text が回り込む。 default 1。
+  // 範囲外は clamp する。
+  inlineSize?: number;
+  // 部分幅 (inlineSize < 1) 時の inline 軸方向の配置。 default 'inline-start'。
+  // horizontal-tb では 'inline-start' = 左、 'inline-end' = 右に対応する。
+  align?: 'inline-start' | 'inline-end';
 }
 
 export interface ObstacleOptions {
@@ -116,6 +123,9 @@ export interface Obstacle {
   whenColumns?: Record<number, WhenColumnsVariant>;
   // whenColumns 経路で「現状どの page に居るか」を保持する。 N 変化で page を移動する。
   currentPage?: Page;
+  // 直近 attach 時に解決された inline 軸方向の配置。 reflowObstacles で float 側を切替える。
+  // legacy / 未 attach は undefined。
+  resolvedAlign?: 'inline-start' | 'inline-end';
 }
 
 export interface FlowOptions {
@@ -597,6 +607,13 @@ function attachVariantObstacle(
   });
   el.style.gridRow = `${variant.at.line} / span ${resolvedLines}`;
   el.dataset.whenColumns = String(n);
+  // 部分幅 (inlineSize < 1) と inline 軸 align を CSS 変数経由で適用する。
+  // 物理長リテラルを JS 側に書かないため、 比率 (0..1) と キーワードのみ受け渡す。
+  const inlineSize = clampInlineSize(variant.inlineSize);
+  const align = variant.align ?? 'inline-start';
+  el.style.setProperty('--tilepage-obs-inline-size', `${(inlineSize * 100).toFixed(4)}%`);
+  el.style.setProperty('--tilepage-obs-justify', alignToJustify(align));
+  obstacle.resolvedAlign = align;
   // page をまたいで移動した場合、 元 page の obstacles 配列から取り除いて新 page に登録し直す。
   if (obstacle.currentPage && obstacle.currentPage !== page) {
     const prev = obstacle.currentPage;
@@ -625,11 +642,35 @@ function detachVariantObstacle(obstacle: Obstacle): void {
   el.dataset.whenColumns = '';
   for (const f of obstacle.floats) f.remove();
   obstacle.floats.length = 0;
+  obstacle.resolvedAlign = undefined;
   if (obstacle.currentPage) {
     const idx = obstacle.currentPage.obstacles.indexOf(obstacle);
     if (idx >= 0) obstacle.currentPage.obstacles.splice(idx, 1);
     obstacle.currentPage = undefined;
   }
+}
+
+// inlineSize は 0 < x <= 1 の比率。 範囲外は clamp し、 0 以下は 1 にフォールバック (デフォルト全幅)。
+function clampInlineSize(value: number | undefined): number {
+  if (value === undefined) return 1;
+  if (!Number.isFinite(value)) return 1;
+  if (value <= 0) return 1;
+  if (value > 1) return 1;
+  return value;
+}
+
+// align キーワードを CSS Grid の justify-self 値に変換する。
+// horizontal-tb (LTR) では inline-start = start (左)、 inline-end = end (右)。
+function alignToJustify(align: 'inline-start' | 'inline-end'): string {
+  return align === 'inline-end' ? 'end' : 'start';
+}
+
+// obstacle に紐づく現在 N の variant から inlineSize を取り出す。
+// whenColumns 未指定 / N 未一致 / inlineSize 未指定は 1 (全幅)。
+function pickVariantInlineSize(obstacle: Obstacle, n: number): number {
+  const v = obstacle.whenColumns?.[n];
+  if (!v) return 1;
+  return clampInlineSize(v.inlineSize);
 }
 
 // addFlow は book 単位の唯一の入口。
@@ -796,7 +837,7 @@ function reflowObstacles(page: Page): void {
   if (pageRect.width === 0 || pageRect.height === 0) return;
 
   const projection = axisProjection(page.book.writingMode);
-  const floatSide = projection.floatSide();
+  const defaultFloatSide = projection.floatSide();
 
   // column ごとに obstacle を block 軸 (top y) 順に並べ、 前の float の終端からの gap を
   // margin-block-start で表現する。 同 column に複数 obstacle がある場合の重なりを防ぐ。
@@ -815,6 +856,10 @@ function reflowObstacles(page: Page): void {
       topY: number;
       bottomY: number;
       leftX: number;
+      rightX: number;
+      floatSide: 'left' | 'right';
+      // 部分幅 (inlineSize < 1) かどうか。 false なら従来通り column 全幅で float 化する。
+      isPartial: boolean;
     };
     const entries: ColEntry[] = [];
     for (const obstacle of page.obstacles) {
@@ -834,7 +879,24 @@ function reflowObstacles(page: Page): void {
       const topY = Math.min(...clipped.map(([, y]) => y));
       const bottomY = Math.max(...clipped.map(([, y]) => y));
       const leftX = Math.min(...clipped.map(([x]) => x));
-      entries.push({ obstacle, clipped, topY, bottomY, leftX });
+      const rightX = Math.max(...clipped.map(([x]) => x));
+      // align: 'inline-end' は inline 軸 end 側 (横書きでは右) に画像を寄せ、 反対側 (左) に
+      // text を流すので float-side='right'。 align 未指定 / 'inline-start' は writing-mode の
+      // デフォルト float-side を使う。
+      const floatSide: 'left' | 'right' =
+        obstacle.resolvedAlign === 'inline-end' ? 'right' : defaultFloatSide;
+      const variantInlineSize = pickVariantInlineSize(obstacle, page.book.columns);
+      const isPartial = variantInlineSize < 1;
+      entries.push({
+        obstacle,
+        clipped,
+        topY,
+        bottomY,
+        leftX,
+        rightX,
+        floatSide,
+        isPartial,
+      });
     }
     if (entries.length === 0) continue;
 
@@ -852,22 +914,45 @@ function reflowObstacles(page: Page): void {
         columnBox.height > 0 ? (entry.bottomY - entry.topY) / columnBox.height : 0;
       const marginRatio =
         columnBox.height > 0 ? Math.max(0, entry.topY - prevBottomY) / columnBox.height : 0;
+      const floatSide = entry.floatSide;
+      const isVertical = projection.writingMode === 'vertical-rl';
 
-      // 横書きでは inline 軸方向に column 全幅、 縦書きでは block 軸方向に column 全高を取る。
-      const floatWidthRatio =
-        floatSide === 'left'
-          ? 1
-          : columnBox.width > 0
-            ? (columnBox.x + columnBox.width - entry.leftX) / columnBox.width
-            : 0;
-      const floatHeightRatio = floatSide === 'left' ? blockSizeRatio : 1;
+      // 横書き default (align:inline-start, 全幅): float:'left' inline-size=100% で従来挙動。
+      // 横書き 部分幅 align:'inline-start': inline-size=obstacle 右端まで (text 右に流れる)。
+      // 横書き 部分幅 align:'inline-end': float:'right' inline-size=obstacle 左端から右端まで (text 左に流れる)。
+      // 縦書き: block 軸全長 × 部分 inline。
+      let floatWidthRatio: number;
+      let floatHeightRatio: number;
+      if (isVertical) {
+        floatWidthRatio =
+          columnBox.width > 0 ? (columnBox.x + columnBox.width - entry.leftX) / columnBox.width : 0;
+        floatHeightRatio = 1;
+      } else if (entry.isPartial) {
+        floatWidthRatio =
+          floatSide === 'right'
+            ? columnBox.width > 0
+              ? (columnBox.x + columnBox.width - entry.leftX) / columnBox.width
+              : 0
+            : columnBox.width > 0
+              ? (entry.rightX - columnBox.x) / columnBox.width
+              : 0;
+        floatHeightRatio = blockSizeRatio;
+      } else {
+        floatWidthRatio = 1;
+        floatHeightRatio = blockSizeRatio;
+      }
 
-      // float ローカル原点 (左上) は obstacle の境界に一致させる。
-      const floatOriginX =
-        floatSide === 'left' ? columnBox.x : columnBox.x + columnBox.width * (1 - floatWidthRatio);
-      const floatOriginY = floatSide === 'left' ? entry.topY : columnBox.y;
+      // float ローカル原点 (左上) は float box の物理左上に一致させる。
+      // 横書き float:'left' は column 左端、 float:'right' は column 右端 - floatWidth。
+      // 縦書きは block 軸全長 (entry.topY ではなく columnBox.y 起点)。
       const floatWidthPx = columnBox.width * floatWidthRatio;
       const floatHeightPx = columnBox.height * floatHeightRatio;
+      const floatOriginX = isVertical
+        ? columnBox.x + columnBox.width * (1 - floatWidthRatio)
+        : floatSide === 'right'
+          ? columnBox.x + columnBox.width - floatWidthPx
+          : columnBox.x;
+      const floatOriginY = isVertical ? columnBox.y : entry.topY;
       const localPoints =
         floatWidthPx > 0 && floatHeightPx > 0
           ? entry.clipped

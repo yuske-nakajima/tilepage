@@ -29,8 +29,8 @@ export const SOURCE_TEXT = merosText.trim();
 const book: Book = createBook({
   container: app,
   columns: {
-    supported: [2, 4, 6, 8],
-    breakpoints: { 8: '90em', 6: '60em', 4: '40em', 2: '0' },
+    supported: [1, 2, 4, 6, 8],
+    breakpoints: { 8: '90em', 6: '60em', 4: '40em', 2: '24em', 1: '0' },
   },
   gutter: '0.8em',
   padding: '4em 1.5em',
@@ -49,6 +49,7 @@ tagObstacle(
     src: '/meros-1-king.png',
     shapeMargin: '0.8em',
     whenColumns: {
+      1: { page: 1, at: { col: 1, line: 1 }, cols: 1, inlineSize: 1 },
       2: { page: 1, at: { col: 1, line: 1 }, cols: 2 },
       4: { page: 1, at: { col: 1, line: 1 }, cols: 2 },
       // 6: 省略 (degrade)
@@ -66,6 +67,14 @@ tagObstacle(
     src: '/meros-2-run.png',
     shapeMargin: '0.8em',
     whenColumns: {
+      1: {
+        page: 1,
+        at: { col: 1, line: 12 },
+        cols: 1,
+        aspect: '3/2',
+        inlineSize: 0.5,
+        align: 'inline-end',
+      },
       2: { page: 1, at: { col: 1, line: 10 }, cols: 2, aspect: '3/2' },
       4: { page: 1, at: { col: 3, line: 3 }, cols: 2, aspect: '3/2' },
       6: { page: 1, at: { col: 4, line: 5 }, cols: 2, aspect: '3/2' },
@@ -90,6 +99,14 @@ tagObstacle(
     src: '/meros-3-reunion.png',
     shapeMargin: '0.8em',
     whenColumns: {
+      1: {
+        page: 2,
+        at: { col: 1, line: 1 },
+        cols: 1,
+        aspect: '3/2',
+        inlineSize: 0.6,
+        align: 'inline-start',
+      },
       2: { page: 2, at: { col: 1, line: 1 }, cols: 2, aspect: '3/2' },
       4: { page: 2, at: { col: 2, line: 2 }, cols: 2, aspect: '3/2' },
       6: { page: 2, at: { col: 3, line: 3 }, cols: 2, aspect: '3/2' },
@@ -105,3 +122,6 @@ if (book.pages.length < 1) addPage(book);
 if (book.pages.length < 2) addPage(book);
 
 addFlow(book, { text: SOURCE_TEXT });
+
+(window as unknown as { __tilepageBook: Book }).__tilepageBook = book;
+app.dataset.ready = 'true';
