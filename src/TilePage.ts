@@ -798,59 +798,79 @@ function reflowObstacles(page: Page): void {
   const projection = axisProjection(page.book.writingMode);
   const floatSide = projection.floatSide();
 
-  for (const obstacle of page.obstacles) {
-    const obRect = obstacle.element.getBoundingClientRect();
-    const obstacleBox: Rect = {
-      x: obRect.left - pageRect.left,
-      y: obRect.top - pageRect.top,
-      width: obRect.width,
-      height: obRect.height,
+  // column ごとに obstacle を block 軸 (top y) 順に並べ、 前の float の終端からの gap を
+  // margin-block-start で表現する。 同 column に複数 obstacle がある場合の重なりを防ぐ。
+  for (const col of page.columnElements) {
+    const colRect = col.getBoundingClientRect();
+    const columnBox: Rect = {
+      x: colRect.left - pageRect.left,
+      y: colRect.top - pageRect.top,
+      width: colRect.width,
+      height: colRect.height,
     };
-    // 正規化された polygon を obstacle 要素のページ絶対座標に展開
-    const absPolygon: Point[] = obstacle.polygon.map(([nx, ny]) => [
-      obstacleBox.x + nx * obstacleBox.width,
-      obstacleBox.y + ny * obstacleBox.height,
-    ]);
 
-    for (const col of page.columnElements) {
-      const colRect = col.getBoundingClientRect();
-      const columnBox: Rect = {
-        x: colRect.left - pageRect.left,
-        y: colRect.top - pageRect.top,
-        width: colRect.width,
-        height: colRect.height,
+    type ColEntry = {
+      obstacle: Obstacle;
+      clipped: Point[];
+      topY: number;
+      bottomY: number;
+      leftX: number;
+    };
+    const entries: ColEntry[] = [];
+    for (const obstacle of page.obstacles) {
+      const obRect = obstacle.element.getBoundingClientRect();
+      const obstacleBox: Rect = {
+        x: obRect.left - pageRect.left,
+        y: obRect.top - pageRect.top,
+        width: obRect.width,
+        height: obRect.height,
       };
+      const absPolygon: Point[] = obstacle.polygon.map(([nx, ny]) => [
+        obstacleBox.x + nx * obstacleBox.width,
+        obstacleBox.y + ny * obstacleBox.height,
+      ]);
       const clipped = clipPolygonByRect(absPolygon, columnBox);
       if (clipped.length < 3) continue;
+      const topY = Math.min(...clipped.map(([, y]) => y));
+      const bottomY = Math.max(...clipped.map(([, y]) => y));
+      const leftX = Math.min(...clipped.map(([x]) => x));
+      entries.push({ obstacle, clipped, topY, bottomY, leftX });
+    }
+    if (entries.length === 0) continue;
 
-      // float の論理寸法は writing-mode に応じて block 軸方向に必要な分だけ取る。
-      // - horizontal-tb (block 軸 = 縦): height は polygon の最下端まで、width は column 全幅
-      // - vertical-rl   (block 軸 = 横、右→左): width は column 右端から polygon 最左端まで、 height は column 全高
-      // 物理 px を CSS に渡さず column box に対する % で表現する (評価軸 #4)。
+    // block 軸の上側から順に積む。
+    entries.sort((a, b) => a.topY - b.topY);
+
+    // 既存子要素 (flow-text 等) より前に obstacle float を順序維持で挿入する。
+    // 各 float を同じ「挿入位置 = anchor」の直前に置けば、 配列順がそのまま DOM 順になる。
+    const anchor = col.firstChild;
+    let prevBottomY = columnBox.y;
+    for (const entry of entries) {
+      // float 自身の block-size = obstacle 自身の block 軸サイズ。 直前の float 終端からの
+      // 距離は margin-block-start で表現する (column 内の y 位置を保つ)。
+      const blockSizeRatio =
+        columnBox.height > 0 ? (entry.bottomY - entry.topY) / columnBox.height : 0;
+      const marginRatio =
+        columnBox.height > 0 ? Math.max(0, entry.topY - prevBottomY) / columnBox.height : 0;
+
+      // 横書きでは inline 軸方向に column 全幅、 縦書きでは block 軸方向に column 全高を取る。
       const floatWidthRatio =
         floatSide === 'left'
           ? 1
           : columnBox.width > 0
-            ? (columnBox.x + columnBox.width - Math.min(...clipped.map(([x]) => x))) /
-              columnBox.width
+            ? (columnBox.x + columnBox.width - entry.leftX) / columnBox.width
             : 0;
-      const floatHeightRatio =
-        floatSide === 'left'
-          ? columnBox.height > 0
-            ? (Math.max(...clipped.map(([, y]) => y)) - columnBox.y) / columnBox.height
-            : 0
-          : 1;
+      const floatHeightRatio = floatSide === 'left' ? blockSizeRatio : 1;
 
-      // float の column 内ローカル原点を column box に対する比率で得る。
-      // shape-outside は float ローカル左上 (0,0) を原点とする座標。
+      // float ローカル原点 (左上) は obstacle の境界に一致させる。
       const floatOriginX =
         floatSide === 'left' ? columnBox.x : columnBox.x + columnBox.width * (1 - floatWidthRatio);
-      const floatOriginY = columnBox.y;
+      const floatOriginY = floatSide === 'left' ? entry.topY : columnBox.y;
       const floatWidthPx = columnBox.width * floatWidthRatio;
       const floatHeightPx = columnBox.height * floatHeightRatio;
       const localPoints =
         floatWidthPx > 0 && floatHeightPx > 0
-          ? clipped
+          ? entry.clipped
               .map(([x, y]) => {
                 const lx = ((x - floatOriginX) / floatWidthPx) * 100;
                 const ly = ((y - floatOriginY) / floatHeightPx) * 100;
@@ -864,11 +884,15 @@ function reflowObstacles(page: Page): void {
       float.style.float = floatSide;
       float.style.inlineSize = `${(floatWidthRatio * 100).toFixed(4)}%`;
       float.style.blockSize = `${(floatHeightRatio * 100).toFixed(4)}%`;
+      if (marginRatio > 0) {
+        float.style.marginBlockStart = `${(marginRatio * 100).toFixed(4)}%`;
+      }
       if (localPoints) float.style.shapeOutside = `polygon(${localPoints})`;
-      float.style.shapeMargin = obstacle.shapeMargin;
+      float.style.shapeMargin = entry.obstacle.shapeMargin;
 
-      col.insertBefore(float, col.firstChild);
-      obstacle.floats.push(float);
+      col.insertBefore(float, anchor);
+      entry.obstacle.floats.push(float);
+      prevBottomY = entry.bottomY;
     }
   }
 }
