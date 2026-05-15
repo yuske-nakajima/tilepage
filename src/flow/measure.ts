@@ -7,10 +7,13 @@ import type { AxisProjection } from './axis';
 // 戻り値の単位は px 数値。NaN / 0 ガード済み (返値は常に有限正数)。
 export function measureLineHeight(root: HTMLElement, projection: AxisProjection): number {
   const doc = root.ownerDocument;
-  const fromRange = measureLineHeightFromRange(root, projection);
-  if (Number.isFinite(fromRange) && fromRange > 0) return fromRange;
+  // computed style の line-height は CSS の line box そのもの。Range#getClientRects は
+  // glyph metrics (ascent+descent) を返すため line-height より小さくなり、grid 行と
+  // text 行の整合性が崩れる。computed style を優先し、Range は normal 時の fallback。
   const fromStyle = measureLineHeightFromComputedStyle(root);
   if (Number.isFinite(fromStyle) && fromStyle > 0) return fromStyle;
+  const fromRange = measureLineHeightFromRange(root, projection);
+  if (Number.isFinite(fromRange) && fromRange > 0) return fromRange;
   return measureLineHeightFromProbe(doc, root);
 }
 
