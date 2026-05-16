@@ -1,5 +1,75 @@
 import type { AxisProjection } from './axis';
 
+// flow-text の line-height を Range#getClientRects で実測する。
+// 1 文字 Range の block 軸サイズ = 1 行高として扱う。
+// テキスト未投入 / フォント未ロード等で測れない場合は、 computed style の line-height を
+// 解釈し、最終フォールバックは font-size * 1.5 (CSS の normal 相当)。
+// 戻り値の単位は px 数値。NaN / 0 ガード済み (返値は常に有限正数)。
+export function measureLineHeight(root: HTMLElement, projection: AxisProjection): number {
+  const doc = root.ownerDocument;
+  // computed style の line-height は CSS の line box そのもの。Range#getClientRects は
+  // glyph metrics (ascent+descent) を返すため line-height より小さくなり、grid 行と
+  // text 行の整合性が崩れる。computed style を優先し、Range は normal 時の fallback。
+  const fromStyle = measureLineHeightFromComputedStyle(root);
+  if (Number.isFinite(fromStyle) && fromStyle > 0) return fromStyle;
+  const fromRange = measureLineHeightFromRange(root, projection);
+  if (Number.isFinite(fromRange) && fromRange > 0) return fromRange;
+  return measureLineHeightFromProbe(doc, root);
+}
+
+// .tilepage-flow-text の 1 grapheme Range の block 軸サイズを行高とする。
+function measureLineHeightFromRange(root: HTMLElement, projection: AxisProjection): number {
+  const holder = root.querySelector<HTMLElement>('.tilepage-flow-text');
+  if (!holder) return Number.NaN;
+  const data = holder.firstChild as Text | null;
+  if (!data || data.data.length === 0) return Number.NaN;
+  const range = root.ownerDocument.createRange();
+  try {
+    range.setStart(data, 0);
+    range.setEnd(data, 1);
+  } catch {
+    return Number.NaN;
+  }
+  const rects = range.getClientRects();
+  if (rects.length === 0) return Number.NaN;
+  // 同じ文字に複数 rect が返るのは line wrap 直前等。 最大の block 軸サイズを採る。
+  let max = 0;
+  for (const r of rects) {
+    const size = Math.abs(projection.blockAxisOf(r).size);
+    if (size > max) max = size;
+  }
+  return max;
+}
+
+// computed style の line-height (数値 px) を読む。 'normal' は NaN を返す。
+function measureLineHeightFromComputedStyle(root: HTMLElement): number {
+  const holder =
+    root.querySelector<HTMLElement>('.tilepage-flow-text') ??
+    root.querySelector<HTMLElement>('.tilepage-column') ??
+    root;
+  const cs = root.ownerDocument.defaultView?.getComputedStyle(holder);
+  if (!cs) return Number.NaN;
+  const lh = Number.parseFloat(cs.lineHeight);
+  if (Number.isFinite(lh) && lh > 0) return lh;
+  return Number.NaN;
+}
+
+// 一時要素を生成して font-size を読み取り 1.5 倍した値を返す。 最終フォールバック。
+function measureLineHeightFromProbe(doc: Document, root: HTMLElement): number {
+  const probe = doc.createElement('div');
+  probe.style.position = 'absolute';
+  probe.style.visibility = 'hidden';
+  probe.style.pointerEvents = 'none';
+  probe.textContent = 'M';
+  root.appendChild(probe);
+  const cs = doc.defaultView?.getComputedStyle(probe);
+  const fontSize = cs ? Number.parseFloat(cs.fontSize) : Number.NaN;
+  probe.remove();
+  if (Number.isFinite(fontSize) && fontSize > 0) return fontSize * 1.5;
+  // 最終手段。デフォルト em ≒ 16 / line-height ≒ 24 相当。
+  return 24;
+}
+
 // window 要素に text を流した時、その window の block 軸方向にいくつ収まるかを返す。
 // 戻り値は「収まった (= 描画後に block 軸が window の block-size を超えない) 末尾 index (exclusive)」。
 // 「収まった」とは: Range#getClientRects() の rect 群を projection で block 軸に投影し、

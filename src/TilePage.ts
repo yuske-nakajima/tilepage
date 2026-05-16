@@ -1,6 +1,7 @@
 import { axisProjection, type WritingMode } from './flow/axis';
 import { splitGraphemes } from './flow/chunk';
 import { distribute, type FlowHost, type FlowWindow } from './flow/distribute';
+import { measureLineHeight } from './flow/measure';
 import { createReflowController, type ReflowController } from './flow/reflow';
 import { injectStyles } from './styles/inject';
 import {
@@ -18,7 +19,13 @@ export type { WritingMode } from './flow/axis';
 // - number: 固定 N。grid-template-columns: repeat(N, 1fr)
 // - { width }: 段幅宣言。N は page inline-size から導出する。
 //   max を指定すると 1 段の上限幅 (1fr のままだと viewport をまたぐ fluid 拡張になる)。
-export type ColumnsConfig = number | { width: string; max?: string };
+// - { supported, breakpoints }: 著者が許可した N の集合に離散スナップする。
+//   breakpoints[N] は CSS 長さリテラル ('40em' 等)。viewport inline-size が
+//   threshold 以上を満たすうち最大の N を選ぶ。該当なしは supported の最小値。
+export type ColumnsConfig =
+  | number
+  | { width: string; max?: string }
+  | { supported: number[]; breakpoints: Record<number, string> };
 
 export interface BookOptions {
   container?: HTMLElement;
@@ -43,6 +50,9 @@ export interface Book {
   // addFlow が呼ばれた時点で初期化される。
   _reflow?: ReflowController;
   _observeResize: boolean;
+  // addObstacle(book, ...) で登録された whenColumns 持ち obstacle 群。
+  // N 変化時に resolveVariantsForBook で再評価され、 page 間を移動する。
+  _variantObstacles: Obstacle[];
 }
 
 export interface PageOptions {
@@ -64,8 +74,28 @@ export interface GridPos {
   row: string;
 }
 
+// 段数 N が一致した時に採用される配置 variant。
+// at.col / at.line は 1-indexed。 line は obstacle-layer の auto-fill row index。
+// lines / aspect の解決優先順位:
+//   1. aspect 指定あり → cols から lines を導出 (lines も指定されていれば warn して aspect 優先)
+//   2. aspect 未指定で lines 指定 → そのまま
+//   3. 両方未指定 → 画像 natural aspect (img.naturalWidth / img.naturalHeight) から導出
+//      画像以外 / natural が取れない場合は FALLBACK_LINES (= 4)
+export interface WhenColumnsVariant {
+  page: number;
+  at: { col: number; line: number };
+  cols: number;
+  lines?: number;
+  // 'W/H' (例: '3/4', '16/9')。 W, H は正の数値文字列。 パース失敗は warn して未指定扱い。
+  aspect?: string;
+}
+
 export interface ObstacleOptions {
-  at: GridPos;
+  // legacy: 物理 row 番号で配置する経路。 whenColumns 未指定時のみ有効。
+  at?: GridPos;
+  // 段数 N → variant の辞書。 現在の N に一致する variant が選ばれる。
+  // 未一致 N では obstacle が display:none で隠れる (graceful degradation)。
+  whenColumns?: Record<number, WhenColumnsVariant>;
   element?: HTMLElement;
   src?: string;
   alt?: string;
@@ -76,11 +106,16 @@ export interface ObstacleOptions {
 
 export interface Obstacle {
   element: HTMLElement;
+  // legacy at で配置された場合の grid 範囲。 whenColumns 経路では空 [0,0]。
   colRange: [number, number];
   rowRange: [number, number];
   floats: HTMLElement[];
   shapeMargin: string;
   polygon: Point[];
+  // whenColumns 経路の保持データ。 legacy at の場合は undefined。
+  whenColumns?: Record<number, WhenColumnsVariant>;
+  // whenColumns 経路で「現状どの page に居るか」を保持する。 N 変化で page を移動する。
+  currentPage?: Page;
 }
 
 export interface FlowOptions {
@@ -99,18 +134,48 @@ export function parseGridRange(s: string): [number, number] {
   return [start, endInclusive + 1];
 }
 
+// ColumnsConfig 3 モードの判別 helper。Union 拡張に伴う runtime guard。
+function isFixedNumberMode(config: ColumnsConfig): config is number {
+  return typeof config === 'number';
+}
+function isSupportedMode(
+  config: ColumnsConfig,
+): config is { supported: number[]; breakpoints: Record<number, string> } {
+  return typeof config === 'object' && 'supported' in config;
+}
+
 export function createBook(options: BookOptions = {}): Book {
   injectStyles();
   const root = document.createElement('div');
   root.className = 'tilepage-book';
   const columnsConfig: ColumnsConfig = options.columns ?? 6;
   const writingMode: WritingMode = options.writingMode ?? 'horizontal-tb';
+  // vertical-rl + supportedColumns の組み合わせは line グリッドの軸 swap が
+  // 未整備のため本バージョンでは未対応。 createBook 時点で早期 throw する。
+  if (writingMode === 'vertical-rl' && isSupportedMode(columnsConfig)) {
+    throw new Error(
+      'tilepage: writingMode "vertical-rl" with supportedColumns is not supported yet',
+    );
+  }
   if (options.gutter) root.style.setProperty('--tilepage-gutter', options.gutter);
   if (options.padding) root.style.setProperty('--tilepage-padding', options.padding);
   root.dataset.writingMode = writingMode;
-  // 初期 N は固定 N モードなら指定値、width モードなら 1 で開始する (後で実測して上書き)。
-  const initialColumns = typeof columnsConfig === 'number' ? columnsConfig : 1;
+  // 初期 N の決め方:
+  // - 固定 N モード: そのまま使う
+  // - supportedColumns モード: 最小値で開始 (page DOM 取得後に viewport で再評価)
+  // - width モード: 1 で開始 (page DOM 取得後に実測)
+  let initialColumns: number;
+  if (isFixedNumberMode(columnsConfig)) {
+    initialColumns = columnsConfig;
+  } else if (isSupportedMode(columnsConfig)) {
+    validateSupportedConfig(columnsConfig);
+    initialColumns = Math.min(...columnsConfig.supported);
+  } else {
+    initialColumns = 1;
+  }
   applyColumnsToRoot(root, columnsConfig, initialColumns);
+  // E2E / DevTools 用に root へ現在 N を同期する (data-active-columns)。
+  root.dataset.activeColumns = String(initialColumns);
   if (options.container) options.container.appendChild(root);
   return {
     root,
@@ -120,7 +185,29 @@ export function createBook(options: BookOptions = {}): Book {
     writingMode,
     _sourceText: '',
     _observeResize: options.observeResize ?? true,
+    _variantObstacles: [],
   };
+}
+
+// supportedColumns / breakpoints の整合性チェック。
+// breakpoints のキーは supported に含まれる N でなければならない (設計判断)。
+function validateSupportedConfig(config: {
+  supported: number[];
+  breakpoints: Record<number, string>;
+}): void {
+  if (config.supported.length === 0) {
+    console.warn('[tilepage] columns.supported is empty; defaulting N=1');
+    return;
+  }
+  const set = new Set(config.supported);
+  for (const key of Object.keys(config.breakpoints)) {
+    const n = Number.parseInt(key, 10);
+    if (!set.has(n)) {
+      console.warn(
+        `[tilepage] columns.breakpoints[${key}] is not in supported [${config.supported.join(',')}]; ignored`,
+      );
+    }
+  }
 }
 
 // CSS 変数経由で flow-layer / obstacle-layer の grid-template-columns を駆動する。
@@ -201,12 +288,13 @@ export function addPage(book: Book, options: PageOptions = {}): Page {
   page.appendChild(obstacleLayer);
   book.root.appendChild(page);
 
-  // width モードでは page が DOM に乗ったタイミングで初めて inline サイズが分かる。
+  // 固定 N 以外のモードでは page が DOM に乗ったタイミングで初めて inline サイズが分かる。
   // 1 page 目作成時に N を確定させる (2 page 目以降は既に確定済の book.columns を使う)。
-  if (typeof book.columnsConfig !== 'number' && book.pages.length === 0) {
-    const n = deriveColumnsFromWidth(book, book.columnsConfig);
+  if (!isFixedNumberMode(book.columnsConfig) && book.pages.length === 0) {
+    const n = resolveColumnsForConfig(book, book.columnsConfig);
     book.columns = n;
     applyColumnsToRoot(book.root, book.columnsConfig, n);
+    book.root.dataset.activeColumns = String(n);
   }
 
   const columnElements: HTMLElement[] = [];
@@ -231,30 +319,37 @@ export function addPage(book: Book, options: PageOptions = {}): Page {
   return pageObj;
 }
 
-export function addObstacle(page: Page, options: ObstacleOptions): Obstacle {
-  let el: HTMLElement;
-  if (options.element) {
-    el = options.element;
-  } else if (options.src) {
-    const img = document.createElement('img');
-    img.src = options.src;
-    if (options.alt) img.alt = options.alt;
-    el = img;
-  } else {
-    el = document.createElement('div');
+// addObstacle は 2 つの呼び出し方を持つ。
+// - addObstacle(page, options): legacy 経路。 options.at の物理 row 番号で配置する。
+// - addObstacle(book, options): whenColumns 経路。 現在 N に対応する variant が
+//   選ばれ、 未一致 N では display:none で隠れる (graceful degradation)。
+export function addObstacle(page: Page, options: ObstacleOptions): Obstacle;
+export function addObstacle(book: Book, options: ObstacleOptions): Obstacle;
+export function addObstacle(target: Page | Book, options: ObstacleOptions): Obstacle {
+  if (isBook(target)) return addObstacleToBook(target, options);
+  return addObstacleToPage(target, options);
+}
+
+// 第一引数の Book / Page 判別。 Book は _variantObstacles を必ず持つ。
+function isBook(target: Page | Book): target is Book {
+  return '_variantObstacles' in target;
+}
+
+function addObstacleToPage(page: Page, options: ObstacleOptions): Obstacle {
+  if (!options.at) {
+    throw new Error('addObstacle(page, ...): options.at is required (legacy path)');
   }
-  el.classList.add('tilepage-obstacle');
+  if (options.whenColumns) {
+    throw new Error('addObstacle(page, ...): options.whenColumns must be used with book argument');
+  }
+  const el = createObstacleElement(options);
+  const polygon = normalizeShape(options.shape ?? 'rect');
+  applyClipPath(el, options.shape, polygon);
+
   const colRange = parseGridRange(options.at.col);
   const rowRange = parseGridRange(options.at.row);
   el.style.gridColumn = `${colRange[0]} / ${colRange[1]}`;
   el.style.gridRow = `${rowRange[0]} / ${rowRange[1]}`;
-
-  const polygon = normalizeShape(options.shape ?? 'rect');
-  const syncClipPath = options.syncClipPath ?? true;
-  if (syncClipPath && options.shape && options.shape !== 'rect') {
-    el.style.clipPath = shapeToClipPath(polygon);
-  }
-
   page.obstacleLayer.appendChild(el);
 
   const obstacle: Obstacle = {
@@ -278,15 +373,356 @@ export function addObstacle(page: Page, options: ObstacleOptions): Obstacle {
     );
   }
   reflowObstacles(page);
-  // obstacle 追加で stream の収容量が変わるため再分配。
-  // observeResize 有効時は controller 経由 (debounce / draining 経路に乗せる)。
-  // observeResize 無効時でも source text が既に流れていれば同期的に再分配する。
-  if (page.book._reflow) {
-    page.book._reflow.request();
-  } else if (page.book._sourceText) {
-    runDistribute(page.book);
-  }
+  triggerRedistribute(page.book);
   return obstacle;
+}
+
+function addObstacleToBook(book: Book, options: ObstacleOptions): Obstacle {
+  if (!options.whenColumns) {
+    throw new Error('addObstacle(book, ...): options.whenColumns is required');
+  }
+  if (options.at) {
+    throw new Error('addObstacle(book, ...): options.at must not be combined with whenColumns');
+  }
+  const el = createObstacleElement(options);
+  const polygon = normalizeShape(options.shape ?? 'rect');
+  applyClipPath(el, options.shape, polygon);
+  // DOM には乗せるが page は variant 解決時に決まる。 初期は detached のまま data-id 等の
+  // 検査が成り立つよう book.root の外には出さず、 まず空の data-when-columns を付ける。
+  el.dataset.whenColumns = '';
+
+  const obstacle: Obstacle = {
+    element: el,
+    colRange: [0, 0],
+    rowRange: [0, 0],
+    floats: [],
+    shapeMargin: options.shapeMargin ?? '0',
+    polygon,
+    whenColumns: options.whenColumns,
+  };
+  book._variantObstacles.push(obstacle);
+
+  if (el.tagName === 'IMG' && !(el as HTMLImageElement).complete) {
+    el.addEventListener(
+      'load',
+      () => {
+        // 画像ロード後は natural aspect が取れるので variant を解決し直す。
+        // resolveVariantsForBook 経由で grid-row span が更新され、 reflow も連動する。
+        resolveVariantsForBook(book);
+        if (obstacle.currentPage) reflowObstacles(obstacle.currentPage);
+        book._reflow?.request();
+      },
+      { once: true },
+    );
+  }
+  // 現在 N で variant を解決し、 適切な page に append する。
+  resolveVariantsForBook(book);
+  triggerRedistribute(book);
+  return obstacle;
+}
+
+// obstacle 要素 (img or div) を生成して .tilepage-obstacle class を付ける。
+function createObstacleElement(options: ObstacleOptions): HTMLElement {
+  let el: HTMLElement;
+  if (options.element) {
+    el = options.element;
+  } else if (options.src) {
+    const img = document.createElement('img');
+    img.src = options.src;
+    if (options.alt) img.alt = options.alt;
+    el = img;
+  } else {
+    el = document.createElement('div');
+  }
+  el.classList.add('tilepage-obstacle');
+  return el;
+}
+
+function applyClipPath(el: HTMLElement, shape: ObstacleShape | undefined, polygon: Point[]): void {
+  if (shape && shape !== 'rect') {
+    el.style.clipPath = shapeToClipPath(polygon);
+  }
+}
+
+// obstacle 追加 / N 変化後の stream 再分配 trigger。
+// observeResize:true は controller 経由、 false でも source text 既存なら同期的に走らせる。
+function triggerRedistribute(book: Book): void {
+  if (book._reflow) {
+    book._reflow.request();
+  } else if (book._sourceText) {
+    runDistribute(book);
+  }
+}
+
+// 現在 N に対し、 全 variant obstacle の page 配置 / grid 座標 / display を解決する。
+function resolveVariantsForBook(book: Book): void {
+  const n = book.columns;
+  const pageCount = book.pages.length;
+  for (const obstacle of book._variantObstacles) {
+    if (!obstacle.whenColumns) continue;
+    const variant = obstacle.whenColumns[n];
+    if (!variant) {
+      detachVariantObstacle(obstacle);
+      continue;
+    }
+    // page を [1, pageCount] に clamp する。pageCount === 0 ならアタッチ不能なので degrade。
+    if (pageCount === 0) {
+      detachVariantObstacle(obstacle);
+      continue;
+    }
+    const pageReasons: string[] = [];
+    let resolvedPage = variant.page;
+    if (resolvedPage < 1) {
+      pageReasons.push(`page:${variant.page}->1`);
+      resolvedPage = 1;
+    } else if (resolvedPage > pageCount) {
+      pageReasons.push(`page:${variant.page}->${pageCount}`);
+      resolvedPage = pageCount;
+    }
+    const targetPage = book.pages[resolvedPage - 1];
+    attachVariantObstacle(obstacle, targetPage, variant, n, pageReasons);
+  }
+}
+
+// aspect 未解決時のフォールバック行数。 画像 natural aspect が取れない / 画像以外の DOM 用。
+const FALLBACK_LINES = 4;
+
+// 'W/H' を { w, h } にパース。 失敗時は undefined。
+function parseAspect(aspect: string): { w: number; h: number } | undefined {
+  const m = aspect.match(/^\s*(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*$/);
+  if (!m) return undefined;
+  const w = Number.parseFloat(m[1]);
+  const h = Number.parseFloat(m[2]);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return undefined;
+  return { w, h };
+}
+
+interface ResolveLinesContext {
+  // cell の inline 軸 size を構成する 1 段あたりの実 px と、 段間 gap の実 px。
+  // cellWidth = cols * columnWidthPx + (cols - 1) * gutterPx
+  columnWidthPx: number;
+  gutterPx: number;
+  lineHeightPx: number;
+  // 画像要素なら naturalWidth/Height を渡す。 未ロード / 画像以外なら undefined。
+  imgIntrinsic?: { w: number; h: number };
+}
+
+// variant.aspect / variant.lines / 画像 natural aspect の優先順位で行数を決定する。
+// 戻り値は常に >= 1 の整数。
+function resolveLines(variant: WhenColumnsVariant, ctx: ResolveLinesContext): number {
+  const cellWidth = variant.cols * ctx.columnWidthPx + (variant.cols - 1) * ctx.gutterPx;
+  // 1. aspect 指定あり → cols から lines を導出。
+  if (variant.aspect !== undefined) {
+    const parsed = parseAspect(variant.aspect);
+    if (parsed) {
+      if (variant.lines !== undefined) {
+        console.warn(
+          `[tilepage] WhenColumnsVariant: both 'aspect' (${variant.aspect}) and 'lines' (${variant.lines}) given; 'aspect' is preferred`,
+        );
+      }
+      if (ctx.lineHeightPx > 0 && cellWidth > 0) {
+        const cellHeight = (cellWidth * parsed.h) / parsed.w;
+        return Math.max(1, Math.round(cellHeight / ctx.lineHeightPx));
+      }
+    } else {
+      console.warn(
+        `[tilepage] WhenColumnsVariant: invalid aspect '${variant.aspect}'; expected 'W/H' (e.g. '3/4'). Falling back to 'lines' or natural aspect.`,
+      );
+    }
+  }
+  // 2. lines 指定 → そのまま。
+  if (variant.lines !== undefined && variant.lines >= 1) {
+    return Math.max(1, Math.floor(variant.lines));
+  }
+  // 3. 画像 natural aspect 経由。
+  if (ctx.imgIntrinsic && ctx.lineHeightPx > 0 && cellWidth > 0) {
+    const cellHeight = (cellWidth * ctx.imgIntrinsic.h) / ctx.imgIntrinsic.w;
+    return Math.max(1, Math.round(cellHeight / ctx.lineHeightPx));
+  }
+  // 4. 画像未ロード or 画像以外。 fallback でとりあえず描画させる。
+  return FALLBACK_LINES;
+}
+
+// 要素から ResolveLinesContext を組み立てる。 px の生成元は computed style のみで、
+// JS 内に物理長リテラルを書かない (評価軸 #4)。
+function buildResolveLinesContext(book: Book, page: Page): ResolveLinesContext {
+  const probe = page.flowLayer;
+  const cs = getComputedStyle(probe);
+  const projection = axisProjection(book.writingMode);
+  // 1 column の inline 軸 size = 全段の inline / N。 padding は除外。
+  const inlineSize = inlineSizeOfElement(probe, book.writingMode);
+  const gutterPx = resolveCssLengthToPx(
+    book.root,
+    cs.getPropertyValue('--tilepage-gutter').trim() || '1em',
+  );
+  const safeGutter = Number.isFinite(gutterPx) && gutterPx > 0 ? gutterPx : 0;
+  const n = Math.max(1, book.columns);
+  // N 段 + (N-1) gap = inlineSize  ⇒  columnWidth = (inlineSize - (N-1)*gutter) / N
+  const columnWidthPx = Math.max(0, (inlineSize - (n - 1) * safeGutter) / n);
+  // line-height: 単位なし数値が --tilepage-line-height に書き込まれている。 fallback で flow-text を実測。
+  const lhVar = Number.parseFloat(cs.getPropertyValue('--tilepage-line-height').trim());
+  const lineHeightPx =
+    Number.isFinite(lhVar) && lhVar > 0 ? lhVar : measureLineHeight(probe, projection);
+  return {
+    columnWidthPx,
+    gutterPx: safeGutter,
+    lineHeightPx,
+    // imgIntrinsic は呼び出し側で obstacle ごとに付与する。
+  };
+}
+
+// 内部 helper のテスト用エクスポート。 公開 API ではない (`_` prefix)。
+export const _internalAspect = {
+  parseAspect,
+  resolveLines,
+  FALLBACK_LINES,
+};
+
+// 画像 element から naturalWidth/Height を取り出す。 未ロード or 画像でない場合 undefined。
+function getImgIntrinsic(el: HTMLElement): { w: number; h: number } | undefined {
+  if (el.tagName !== 'IMG') return undefined;
+  const img = el as HTMLImageElement;
+  if (!img.complete) return undefined;
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return undefined;
+  return { w, h };
+}
+
+// variant 適用: 対象 page の obstacle-layer に move し、 grid 座標と data 属性を更新する。
+// 範囲外の at.col / at.line / cols / lines / page は clamp し、 発生理由を element.dataset と
+// console.warn に残す。
+function attachVariantObstacle(
+  obstacle: Obstacle,
+  page: Page,
+  variant: WhenColumnsVariant,
+  n: number,
+  pageReasons: ReadonlyArray<string> = [],
+): void {
+  const el = obstacle.element;
+  el.style.display = '';
+  const baseCtx = buildResolveLinesContext(page.book, page);
+  const resolvedLines = resolveLines(variant, {
+    ...baseCtx,
+    imgIntrinsic: getImgIntrinsic(el),
+  });
+  const projection = axisProjection(page.book.writingMode);
+  // obstacle-layer の content area (padding を引いた領域) を基準に maxLines を出す。
+  // padding は createBook の宣言値が CSS 変数経由で obstacle-layer に効いている。
+  // padding 込みで計算すると clamp が page 端まで占有して余白がなくなるため、 logical
+  // padding-block を引いた content 領域で「下辺を maxLine に合わせる」挙動にする。
+  const layerCs = getComputedStyle(page.obstacleLayer);
+  const padBlockStart = Number.parseFloat(layerCs.paddingBlockStart) || 0;
+  const padBlockEnd = Number.parseFloat(layerCs.paddingBlockEnd) || 0;
+  const layerBlockSize = projection.blockSizeOf(page.obstacleLayer);
+  const contentBlockSize = Math.max(0, layerBlockSize - padBlockStart - padBlockEnd);
+  const maxLines =
+    baseCtx.lineHeightPx > 0 && contentBlockSize > 0
+      ? Math.max(1, Math.floor(contentBlockSize / baseCtx.lineHeightPx))
+      : Number.POSITIVE_INFINITY;
+  const clamped = clampVariantPlacement(variant, resolvedLines, n, maxLines);
+  el.style.gridColumn = `${clamped.col} / span ${clamped.cols}`;
+  el.style.gridRow = `${clamped.line} / span ${clamped.lines}`;
+  el.dataset.whenColumns = String(n);
+  const allReasons = [...pageReasons, ...clamped.reasons];
+  if (allReasons.length > 0) {
+    el.dataset.clampReasons = allReasons.join(',');
+    console.warn('[tilepage] variant clamped', {
+      obstacleId: el.dataset.id ?? el.id ?? '(unnamed)',
+      n,
+      declared: variant,
+      resolved: {
+        page:
+          pageReasons.find((r) => r.startsWith('page:'))?.split('->')[1] ?? String(variant.page),
+        col: clamped.col,
+        line: clamped.line,
+        cols: clamped.cols,
+        lines: clamped.lines,
+      },
+      reasons: allReasons,
+    });
+  } else if (el.dataset.clampReasons !== undefined) {
+    delete el.dataset.clampReasons;
+  }
+  // page をまたいで移動した場合、 元 page の obstacles 配列から取り除いて新 page に登録し直す。
+  if (obstacle.currentPage && obstacle.currentPage !== page) {
+    const prev = obstacle.currentPage;
+    const idx = prev.obstacles.indexOf(obstacle);
+    if (idx >= 0) prev.obstacles.splice(idx, 1);
+    for (const f of obstacle.floats) f.remove();
+    obstacle.floats.length = 0;
+  }
+  if (el.parentElement !== page.obstacleLayer) {
+    page.obstacleLayer.appendChild(el);
+  }
+  if (!page.obstacles.includes(obstacle)) {
+    page.obstacles.push(obstacle);
+  }
+  // legacy 経路の colRange / rowRange を clamp 後の値で同期する。
+  obstacle.colRange = [clamped.col, clamped.col + clamped.cols];
+  obstacle.rowRange = [clamped.line, clamped.line + clamped.lines];
+  obstacle.currentPage = page;
+}
+
+// at.col / at.line / cols / lines を [1, max] に clamp する。
+// 下辺 / 右端を max に合わせる方向で line / col の起点を引き戻すので、 over 宣言時に
+// 画像の底 (block-end) と右端 (inline-end) が page / column の最大値に揃う。
+function clampVariantPlacement(
+  variant: WhenColumnsVariant,
+  resolvedLines: number,
+  n: number,
+  maxLines: number,
+): { col: number; line: number; cols: number; lines: number; reasons: string[] } {
+  const reasons: string[] = [];
+  let cols = variant.cols;
+  if (cols < 1) {
+    reasons.push(`cols:${variant.cols}->1`);
+    cols = 1;
+  } else if (cols > n) {
+    reasons.push(`cols:${variant.cols}->${n}`);
+    cols = n;
+  }
+  let col = variant.at.col;
+  if (col < 1) {
+    reasons.push(`at.col:${variant.at.col}->1`);
+    col = 1;
+  } else if (col + cols - 1 > n) {
+    const next = Math.max(1, n - cols + 1);
+    reasons.push(`at.col:${variant.at.col}->${next}`);
+    col = next;
+  }
+  let lines = resolvedLines;
+  if (lines < 1) {
+    reasons.push(`lines:${resolvedLines}->1`);
+    lines = 1;
+  } else if (Number.isFinite(maxLines) && lines > maxLines) {
+    reasons.push(`lines:${resolvedLines}->${maxLines}`);
+    lines = maxLines;
+  }
+  let line = variant.at.line;
+  if (line < 1) {
+    reasons.push(`at.line:${variant.at.line}->1`);
+    line = 1;
+  } else if (Number.isFinite(maxLines) && line + lines - 1 > maxLines) {
+    const next = Math.max(1, maxLines - lines + 1);
+    reasons.push(`at.line:${variant.at.line}->${next}`);
+    line = next;
+  }
+  return { col, line, cols, lines, reasons };
+}
+
+// variant 未定義 N の degrade 処理: display:none にし、 page から取り外す。
+function detachVariantObstacle(obstacle: Obstacle): void {
+  const el = obstacle.element;
+  el.style.display = 'none';
+  el.dataset.whenColumns = '';
+  for (const f of obstacle.floats) f.remove();
+  obstacle.floats.length = 0;
+  if (obstacle.currentPage) {
+    const idx = obstacle.currentPage.obstacles.indexOf(obstacle);
+    if (idx >= 0) obstacle.currentPage.obstacles.splice(idx, 1);
+    obstacle.currentPage = undefined;
+  }
 }
 
 // addFlow は book 単位の唯一の入口。
@@ -320,22 +756,69 @@ function syncColumnElementsTo(
   }
 }
 
-// width モードでは reflow ごとに N を再計算し、全 page の column 要素数を揃える。
-function updateColumnsForWidthMode(book: Book): void {
-  if (typeof book.columnsConfig === 'number') return;
-  const n = deriveColumnsFromWidth(book, book.columnsConfig);
-  if (n === book.columns) return;
+// viewport から現在 N を導出するモード共通の resolver。
+// 固定 N: 値そのまま / width: 段幅から実数導出 / supported: 離散スナップ。
+function resolveColumnsForConfig(book: Book, config: ColumnsConfig): number {
+  if (isFixedNumberMode(config)) return config;
+  if (isSupportedMode(config)) return deriveColumnsFromSupported(book, config);
+  return deriveColumnsFromWidth(book, config);
+}
+
+// supportedColumns + breakpoints から N を導出する。
+// 1. breakpoints の値を px に解決
+// 2. viewport inline-size >= threshold を満たすうち最大の N を選ぶ
+// 3. 該当なしなら supported の最小値にフォールバック (下スナップ)
+//
+// 比較対象は viewport 全体 (CSS の `@media (min-width: ...)` と同じ意味論)。
+// page / flow-layer の inline-size ではなく window の inline 軸サイズを使う。
+function deriveColumnsFromSupported(
+  book: Book,
+  config: { supported: number[]; breakpoints: Record<number, string> },
+): number {
+  if (config.supported.length === 0) return 1;
+  const minN = Math.min(...config.supported);
+  const win = book.root.ownerDocument.defaultView ?? window;
+  const inlineSize = book.writingMode === 'vertical-rl' ? win.innerHeight : win.innerWidth;
+  if (!Number.isFinite(inlineSize) || inlineSize <= 0) return minN;
+  // 各 supported N の threshold を px 化し、 viewport >= threshold を満たすものを集める。
+  const candidates: Array<{ n: number; px: number }> = [];
+  for (const n of config.supported) {
+    const literal = config.breakpoints[n];
+    if (literal === undefined) continue;
+    const px = resolveCssLengthToPx(book.root, literal);
+    if (!Number.isFinite(px)) continue;
+    if (inlineSize >= px) candidates.push({ n, px });
+  }
+  if (candidates.length === 0) return minN;
+  // threshold が同点なら N が大きい方を優先 (より多段に倒す)。
+  candidates.sort((a, b) => b.n - a.n);
+  return candidates[0].n;
+}
+
+// 固定 N 以外の全モードで reflow ごとに N を再計算し、全 page の column 要素数を揃える。
+function updateColumnsForViewport(book: Book): void {
+  if (isFixedNumberMode(book.columnsConfig)) return;
+  const n = resolveColumnsForConfig(book, book.columnsConfig);
+  if (n === book.columns) {
+    // N 変化なしでも root の data-active-columns は念のため同期させる。
+    book.root.dataset.activeColumns = String(n);
+    return;
+  }
   book.columns = n;
   applyColumnsToRoot(book.root, book.columnsConfig, n);
+  book.root.dataset.activeColumns = String(n);
   for (const page of book.pages) {
     syncColumnElementsTo(page.flowLayer, page.columnElements, n);
   }
 }
 
 function runDistribute(book: Book): void {
-  // width モードでは page inline サイズが変わると N が変動する。
+  // 固定 N 以外では page inline サイズが変わると N が変動する。
   // distribute 前に column 要素数を最新 viewport に合わせ直す。
-  updateColumnsForWidthMode(book);
+  updateColumnsForViewport(book);
+  // 行高は CSS Grid の auto-fill row 単位として CSS 変数で流す。 変数の値は単位なし数値で、
+  // CSS 側で calc 経由で長さ単位に変換する (src 側に長さ文字列を書かない方針)。
+  syncLineHeightVar(book);
 
   const graphemes = splitGraphemes(book._sourceText);
   const projection = axisProjection(book.writingMode);
@@ -363,9 +846,27 @@ function runDistribute(book: Book): void {
     },
   };
 
+  // variant 解決を distribute 前に走らせ、 variant obstacle を該当 page に attach する。
+  // distribute の trimPagesAfter は obstacle を持つ page を保持するため、 attach 済みなら
+  // page=2 等の variant が消えない。
+  resolveVariantsForBook(book);
   distribute(host, graphemes, projection);
+  // distribute 後に page 数が変わった場合に備えて再解決 (足りなかった page が増えていれば再 attach)。
+  resolveVariantsForBook(book);
   // 再分配で obstacle の column 内交差も変動するため、各 page の float も再計算する。
   for (const page of book.pages) reflowObstacles(page);
+}
+
+// flow-text の line-height を実測し、 book.root に CSS 変数として書き込む。
+// CSS 側で calc 経由の単位変換を行うため、 ここでは単位なし数値だけを set する。
+function syncLineHeightVar(book: Book): void {
+  if (book.pages.length === 0) return;
+  const projection = axisProjection(book.writingMode);
+  const probe = book.pages[0].flowLayer;
+  const lh = measureLineHeight(probe, projection);
+  if (!Number.isFinite(lh) || lh <= 0) return;
+  // 単位なし数値として保存する (単位は CSS 側で calc 経由で付与する)。
+  book.root.style.setProperty('--tilepage-line-height', String(lh));
 }
 
 function ensureReflowController(book: Book): void {
@@ -378,11 +879,53 @@ function ensureReflowController(book: Book): void {
   });
 }
 
+// 横書きの 2 分割 float (左半分: float-left / 右半分: float-right) を生成する helper。
+// halfXInPage / halfWidthPx は分割後の float box の column 内 page-relative 領域。
+function createHorizontalHalfFloat(
+  halfPolygon: Point[],
+  columnBox: Rect,
+  halfXInPage: number,
+  halfWidthPx: number,
+  blockSizeRatio: number,
+  side: 'left' | 'right',
+  shapeMargin: string,
+): HTMLElement {
+  const floatHeightPx = columnBox.height * blockSizeRatio;
+  const floatOriginX = halfXInPage;
+  const floatOriginY = columnBox.y;
+  const inlineRatio = columnBox.width > 0 ? halfWidthPx / columnBox.width : 0;
+  const localPoints =
+    halfWidthPx > 0 && floatHeightPx > 0
+      ? halfPolygon
+          .map(([x, y]) => {
+            const lx = ((x - floatOriginX) / halfWidthPx) * 100;
+            const ly = ((y - floatOriginY) / floatHeightPx) * 100;
+            return `${lx.toFixed(4)}% ${ly.toFixed(4)}%`;
+          })
+          .join(', ')
+      : '';
+  const el = document.createElement('div');
+  el.className = 'tilepage-obstacle-float';
+  el.style.float = side;
+  el.style.inlineSize = `${(inlineRatio * 100).toFixed(4)}%`;
+  el.style.blockSize = `${(blockSizeRatio * 100).toFixed(4)}%`;
+  if (localPoints) el.style.shapeOutside = `polygon(${localPoints})`;
+  el.style.shapeMargin = shapeMargin;
+  return el;
+}
+
 function reflowObstacles(page: Page): void {
   for (const obstacle of page.obstacles) {
     for (const f of obstacle.floats) f.remove();
     obstacle.floats.length = 0;
   }
+
+  // line-height は CSS 変数で book.root に保持されている。 column 底に 1 行未満の
+  // residual が残ると text が overflow:hidden で滲み出すため、 float の block-size を
+  // 延長して埋めるのに使う。
+  const rootCs = getComputedStyle(page.book.root);
+  const lhVar = Number.parseFloat(rootCs.getPropertyValue('--tilepage-line-height').trim());
+  const lineHeightPx = Number.isFinite(lhVar) && lhVar > 0 ? lhVar : 0;
 
   const pageRect = page.element.getBoundingClientRect();
   if (pageRect.width === 0 || pageRect.height === 0) return;
@@ -415,52 +958,114 @@ function reflowObstacles(page: Page): void {
       const clipped = clipPolygonByRect(absPolygon, columnBox);
       if (clipped.length < 3) continue;
 
-      // float の論理寸法は writing-mode に応じて block 軸方向に必要な分だけ取る。
-      // - horizontal-tb (block 軸 = 縦): height は polygon の最下端まで、width は column 全幅
-      // - vertical-rl   (block 軸 = 横、右→左): width は column 右端から polygon 最左端まで、 height は column 全高
-      // 物理 px を CSS に渡さず column box に対する % で表現する (評価軸 #4)。
-      const floatWidthRatio =
-        floatSide === 'left'
-          ? 1
-          : columnBox.width > 0
+      const polygonBottomY = Math.max(...clipped.map(([, y]) => y));
+      const columnBottomY = columnBox.y + columnBox.height;
+      const residualBottom = columnBottomY - polygonBottomY;
+      const fillResidual = lineHeightPx > 0 && residualBottom > 0 && residualBottom < lineHeightPx;
+
+      if (floatSide === 'left') {
+        // horizontal-tb: 非矩形 shape の bounding rect 左側 corner にも text を流すため、
+        // clipped polygon を縦中央で 2 分割し、 float-left + float-right の対で inject する。
+        // 各 float の polygon は shape の半分を覆い、 反対側の corner は polygon 外なので
+        // shape-outside 仕様に従い text が流れる。
+        const minX = Math.min(...clipped.map(([x]) => x));
+        const maxX = Math.max(...clipped.map(([x]) => x));
+        const centerX = (minX + maxX) / 2;
+
+        const leftRect: Rect = {
+          x: columnBox.x,
+          y: columnBox.y,
+          width: centerX - columnBox.x,
+          height: columnBox.height,
+        };
+        const rightRect: Rect = {
+          x: centerX,
+          y: columnBox.y,
+          width: columnBox.x + columnBox.width - centerX,
+          height: columnBox.height,
+        };
+
+        const leftHalf = clipPolygonByRect(clipped, leftRect);
+        const rightHalf = clipPolygonByRect(clipped, rightRect);
+
+        const blockSizeRatio =
+          columnBox.height > 0 ? (polygonBottomY - columnBox.y) / columnBox.height : 0;
+
+        // anchor を固定して順次 insertBefore することで、 DOM 順を [leftFloat, rightFloat, spacer]
+        // に保つ。CSS float は DOM 順に処理されるので、 同じ row で leftFloat(左) + rightFloat(右)
+        // が並び、 spacer (full-width float-left) は次 row に追いやられる。
+        const anchor = col.firstChild;
+        if (leftHalf.length >= 3 && leftRect.width > 0) {
+          const f = createHorizontalHalfFloat(
+            leftHalf,
+            columnBox,
+            leftRect.x,
+            leftRect.width,
+            blockSizeRatio,
+            'left',
+            obstacle.shapeMargin,
+          );
+          col.insertBefore(f, anchor);
+          obstacle.floats.push(f);
+        }
+        if (rightHalf.length >= 3 && rightRect.width > 0) {
+          const f = createHorizontalHalfFloat(
+            rightHalf,
+            columnBox,
+            rightRect.x,
+            rightRect.width,
+            blockSizeRatio,
+            'right',
+            obstacle.shapeMargin,
+          );
+          col.insertBefore(f, anchor);
+          obstacle.floats.push(f);
+        }
+        if (fillResidual) {
+          // column 底に 1 行未満の隙間が残る時、shape を持たない full-width spacer を最後に
+          // inject して text が滲み出すのを防ぐ。 anchor の前に挿入することで [left, right, spacer]
+          // の DOM 順を保つ。
+          const spacer = document.createElement('div');
+          spacer.className = 'tilepage-obstacle-float';
+          spacer.style.float = 'left';
+          spacer.style.inlineSize = '100%';
+          spacer.style.blockSize = `${((residualBottom / columnBox.height) * 100).toFixed(4)}%`;
+          col.insertBefore(spacer, anchor);
+          obstacle.floats.push(spacer);
+        }
+      } else {
+        // vertical-rl は inline 軸が縦になるため split 軸も swap される。
+        // 本実装では horizontal-tb のみ 2 分割対応とし、 縦書きは従来の単一 float のまま。
+        const floatWidthRatio =
+          columnBox.width > 0
             ? (columnBox.x + columnBox.width - Math.min(...clipped.map(([x]) => x))) /
               columnBox.width
             : 0;
-      const floatHeightRatio =
-        floatSide === 'left'
-          ? columnBox.height > 0
-            ? (Math.max(...clipped.map(([, y]) => y)) - columnBox.y) / columnBox.height
-            : 0
-          : 1;
-
-      // float の column 内ローカル原点を column box に対する比率で得る。
-      // shape-outside は float ローカル左上 (0,0) を原点とする座標。
-      const floatOriginX =
-        floatSide === 'left' ? columnBox.x : columnBox.x + columnBox.width * (1 - floatWidthRatio);
-      const floatOriginY = columnBox.y;
-      const floatWidthPx = columnBox.width * floatWidthRatio;
-      const floatHeightPx = columnBox.height * floatHeightRatio;
-      const localPoints =
-        floatWidthPx > 0 && floatHeightPx > 0
-          ? clipped
-              .map(([x, y]) => {
-                const lx = ((x - floatOriginX) / floatWidthPx) * 100;
-                const ly = ((y - floatOriginY) / floatHeightPx) * 100;
-                return `${lx.toFixed(4)}% ${ly.toFixed(4)}%`;
-              })
-              .join(', ')
-          : '';
-
-      const float = document.createElement('div');
-      float.className = 'tilepage-obstacle-float';
-      float.style.float = floatSide;
-      float.style.inlineSize = `${(floatWidthRatio * 100).toFixed(4)}%`;
-      float.style.blockSize = `${(floatHeightRatio * 100).toFixed(4)}%`;
-      if (localPoints) float.style.shapeOutside = `polygon(${localPoints})`;
-      float.style.shapeMargin = obstacle.shapeMargin;
-
-      col.insertBefore(float, col.firstChild);
-      obstacle.floats.push(float);
+        const floatHeightRatio = 1;
+        const floatOriginX = columnBox.x + columnBox.width * (1 - floatWidthRatio);
+        const floatOriginY = columnBox.y;
+        const floatWidthPx = columnBox.width * floatWidthRatio;
+        const floatHeightPx = columnBox.height * floatHeightRatio;
+        const localPoints =
+          floatWidthPx > 0 && floatHeightPx > 0
+            ? clipped
+                .map(([x, y]) => {
+                  const lx = ((x - floatOriginX) / floatWidthPx) * 100;
+                  const ly = ((y - floatOriginY) / floatHeightPx) * 100;
+                  return `${lx.toFixed(4)}% ${ly.toFixed(4)}%`;
+                })
+                .join(', ')
+            : '';
+        const float = document.createElement('div');
+        float.className = 'tilepage-obstacle-float';
+        float.style.float = 'right';
+        float.style.inlineSize = `${(floatWidthRatio * 100).toFixed(4)}%`;
+        float.style.blockSize = `${(floatHeightRatio * 100).toFixed(4)}%`;
+        if (localPoints) float.style.shapeOutside = `polygon(${localPoints})`;
+        float.style.shapeMargin = obstacle.shapeMargin;
+        col.insertBefore(float, col.firstChild);
+        obstacle.floats.push(float);
+      }
     }
   }
 }
