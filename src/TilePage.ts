@@ -879,6 +879,41 @@ function ensureReflowController(book: Book): void {
   });
 }
 
+// 横書きの 2 分割 float (左半分: float-left / 右半分: float-right) を生成する helper。
+// halfXInPage / halfWidthPx は分割後の float box の column 内 page-relative 領域。
+function createHorizontalHalfFloat(
+  halfPolygon: Point[],
+  columnBox: Rect,
+  halfXInPage: number,
+  halfWidthPx: number,
+  blockSizeRatio: number,
+  side: 'left' | 'right',
+  shapeMargin: string,
+): HTMLElement {
+  const floatHeightPx = columnBox.height * blockSizeRatio;
+  const floatOriginX = halfXInPage;
+  const floatOriginY = columnBox.y;
+  const inlineRatio = columnBox.width > 0 ? halfWidthPx / columnBox.width : 0;
+  const localPoints =
+    halfWidthPx > 0 && floatHeightPx > 0
+      ? halfPolygon
+          .map(([x, y]) => {
+            const lx = ((x - floatOriginX) / halfWidthPx) * 100;
+            const ly = ((y - floatOriginY) / floatHeightPx) * 100;
+            return `${lx.toFixed(4)}% ${ly.toFixed(4)}%`;
+          })
+          .join(', ')
+      : '';
+  const el = document.createElement('div');
+  el.className = 'tilepage-obstacle-float';
+  el.style.float = side;
+  el.style.inlineSize = `${(inlineRatio * 100).toFixed(4)}%`;
+  el.style.blockSize = `${(blockSizeRatio * 100).toFixed(4)}%`;
+  if (localPoints) el.style.shapeOutside = `polygon(${localPoints})`;
+  el.style.shapeMargin = shapeMargin;
+  return el;
+}
+
 function reflowObstacles(page: Page): void {
   for (const obstacle of page.obstacles) {
     for (const f of obstacle.floats) f.remove();
@@ -923,70 +958,113 @@ function reflowObstacles(page: Page): void {
       const clipped = clipPolygonByRect(absPolygon, columnBox);
       if (clipped.length < 3) continue;
 
-      // float の論理寸法は writing-mode に応じて block 軸方向に必要な分だけ取る。
-      // - horizontal-tb (block 軸 = 縦): height は polygon の最下端まで、width は column 全幅
-      // - vertical-rl   (block 軸 = 横、右→左): width は column 右端から polygon 最左端まで、 height は column 全高
-      // 物理 px を CSS に渡さず column box に対する % で表現する (評価軸 #4)。
-      const floatWidthRatio =
-        floatSide === 'left'
-          ? 1
-          : columnBox.width > 0
-            ? (columnBox.x + columnBox.width - Math.min(...clipped.map(([x]) => x))) /
-              columnBox.width
-            : 0;
-      // 横書きでは polygon 最下端まで取る。 1 行に満たない column 底側の residual は
-      // margin-block-end で埋めて text の overflow:hidden クリップ滲み出しを防ぐ。
       const polygonBottomY = Math.max(...clipped.map(([, y]) => y));
       const columnBottomY = columnBox.y + columnBox.height;
       const residualBottom = columnBottomY - polygonBottomY;
       const fillResidual = lineHeightPx > 0 && residualBottom > 0 && residualBottom < lineHeightPx;
-      const floatHeightRatio =
-        floatSide === 'left'
-          ? columnBox.height > 0
-            ? (polygonBottomY - columnBox.y) / columnBox.height
-            : 0
-          : 1;
 
-      // float の column 内ローカル原点を column box に対する比率で得る。
-      // shape-outside は float ローカル左上 (0,0) を原点とする座標。
-      const floatOriginX =
-        floatSide === 'left' ? columnBox.x : columnBox.x + columnBox.width * (1 - floatWidthRatio);
-      const floatOriginY = columnBox.y;
-      const floatWidthPx = columnBox.width * floatWidthRatio;
-      const floatHeightPx = columnBox.height * floatHeightRatio;
-      const localPoints =
-        floatWidthPx > 0 && floatHeightPx > 0
-          ? clipped
-              .map(([x, y]) => {
-                const lx = ((x - floatOriginX) / floatWidthPx) * 100;
-                const ly = ((y - floatOriginY) / floatHeightPx) * 100;
-                return `${lx.toFixed(4)}% ${ly.toFixed(4)}%`;
-              })
-              .join(', ')
-          : '';
+      if (floatSide === 'left') {
+        // horizontal-tb: 非矩形 shape の bounding rect 左側 corner にも text を流すため、
+        // clipped polygon を縦中央で 2 分割し、 float-left + float-right の対で inject する。
+        // 各 float の polygon は shape の半分を覆い、 反対側の corner は polygon 外なので
+        // shape-outside 仕様に従い text が流れる。
+        const minX = Math.min(...clipped.map(([x]) => x));
+        const maxX = Math.max(...clipped.map(([x]) => x));
+        const centerX = (minX + maxX) / 2;
 
-      const float = document.createElement('div');
-      float.className = 'tilepage-obstacle-float';
-      float.style.float = floatSide;
-      float.style.inlineSize = `${(floatWidthRatio * 100).toFixed(4)}%`;
-      float.style.blockSize = `${(floatHeightRatio * 100).toFixed(4)}%`;
-      if (localPoints) float.style.shapeOutside = `polygon(${localPoints})`;
-      float.style.shapeMargin = obstacle.shapeMargin;
+        const leftRect: Rect = {
+          x: columnBox.x,
+          y: columnBox.y,
+          width: centerX - columnBox.x,
+          height: columnBox.height,
+        };
+        const rightRect: Rect = {
+          x: centerX,
+          y: columnBox.y,
+          width: columnBox.x + columnBox.width - centerX,
+          height: columnBox.height,
+        };
 
-      col.insertBefore(float, col.firstChild);
-      obstacle.floats.push(float);
+        const leftHalf = clipPolygonByRect(clipped, leftRect);
+        const rightHalf = clipPolygonByRect(clipped, rightRect);
 
-      if (fillResidual) {
-        // 1 行に満たない column 底側の隙間を二つ目の float で完全に埋める。
-        // shape-outside を持たない素の矩形 float がスタックされ、 text が滲み込む余地を消す。
-        // float の直後 (= 下) に挿入することで block-flow 順を保つ。
-        const spacer = document.createElement('div');
-        spacer.className = 'tilepage-obstacle-float';
-        spacer.style.float = floatSide;
-        spacer.style.inlineSize = '100%';
-        spacer.style.blockSize = `${((residualBottom / columnBox.height) * 100).toFixed(4)}%`;
-        col.insertBefore(spacer, float.nextSibling);
-        obstacle.floats.push(spacer);
+        const blockSizeRatio =
+          columnBox.height > 0 ? (polygonBottomY - columnBox.y) / columnBox.height : 0;
+
+        // anchor を固定して順次 insertBefore することで、 DOM 順を [leftFloat, rightFloat, spacer]
+        // に保つ。CSS float は DOM 順に処理されるので、 同じ row で leftFloat(左) + rightFloat(右)
+        // が並び、 spacer (full-width float-left) は次 row に追いやられる。
+        const anchor = col.firstChild;
+        if (leftHalf.length >= 3 && leftRect.width > 0) {
+          const f = createHorizontalHalfFloat(
+            leftHalf,
+            columnBox,
+            leftRect.x,
+            leftRect.width,
+            blockSizeRatio,
+            'left',
+            obstacle.shapeMargin,
+          );
+          col.insertBefore(f, anchor);
+          obstacle.floats.push(f);
+        }
+        if (rightHalf.length >= 3 && rightRect.width > 0) {
+          const f = createHorizontalHalfFloat(
+            rightHalf,
+            columnBox,
+            rightRect.x,
+            rightRect.width,
+            blockSizeRatio,
+            'right',
+            obstacle.shapeMargin,
+          );
+          col.insertBefore(f, anchor);
+          obstacle.floats.push(f);
+        }
+        if (fillResidual) {
+          // column 底に 1 行未満の隙間が残る時、shape を持たない full-width spacer を最後に
+          // inject して text が滲み出すのを防ぐ。 anchor の前に挿入することで [left, right, spacer]
+          // の DOM 順を保つ。
+          const spacer = document.createElement('div');
+          spacer.className = 'tilepage-obstacle-float';
+          spacer.style.float = 'left';
+          spacer.style.inlineSize = '100%';
+          spacer.style.blockSize = `${((residualBottom / columnBox.height) * 100).toFixed(4)}%`;
+          col.insertBefore(spacer, anchor);
+          obstacle.floats.push(spacer);
+        }
+      } else {
+        // vertical-rl は inline 軸が縦になるため split 軸も swap される。
+        // 本実装では horizontal-tb のみ 2 分割対応とし、 縦書きは従来の単一 float のまま。
+        const floatWidthRatio =
+          columnBox.width > 0
+            ? (columnBox.x + columnBox.width - Math.min(...clipped.map(([x]) => x))) /
+              columnBox.width
+            : 0;
+        const floatHeightRatio = 1;
+        const floatOriginX = columnBox.x + columnBox.width * (1 - floatWidthRatio);
+        const floatOriginY = columnBox.y;
+        const floatWidthPx = columnBox.width * floatWidthRatio;
+        const floatHeightPx = columnBox.height * floatHeightRatio;
+        const localPoints =
+          floatWidthPx > 0 && floatHeightPx > 0
+            ? clipped
+                .map(([x, y]) => {
+                  const lx = ((x - floatOriginX) / floatWidthPx) * 100;
+                  const ly = ((y - floatOriginY) / floatHeightPx) * 100;
+                  return `${lx.toFixed(4)}% ${ly.toFixed(4)}%`;
+                })
+                .join(', ')
+            : '';
+        const float = document.createElement('div');
+        float.className = 'tilepage-obstacle-float';
+        float.style.float = 'right';
+        float.style.inlineSize = `${(floatWidthRatio * 100).toFixed(4)}%`;
+        float.style.blockSize = `${(floatHeightRatio * 100).toFixed(4)}%`;
+        if (localPoints) float.style.shapeOutside = `polygon(${localPoints})`;
+        float.style.shapeMargin = obstacle.shapeMargin;
+        col.insertBefore(float, col.firstChild);
+        obstacle.floats.push(float);
       }
     }
   }
