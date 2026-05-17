@@ -1090,8 +1090,14 @@ function logicalOps(mode: WritingMode): LogicalAxisOps {
       polygonBlockEndOf: (poly) => Math.min(...poly.map(([x]) => x)),
       columnBlockStart: (box) => box.x + box.width,
       columnBlockEnd: (box) => box.x,
-      startFloat: 'right',
-      endFloat: 'left',
+      // CSS Writing Modes 3 (line-left/right): vertical-rl では
+      //   float: left  = line-left  = 物理 top    = inline-start
+      //   float: right = line-right = 物理 bottom = inline-end
+      // 横書き (horizontal-tb) と「inline-start = left / inline-end = right」 が
+      // 完全に一致する。 startHalfRect は inline-start (= 物理上半分) を覆い、
+      // float: left でその上半分に配置されるため shape の物理位置と一致する。
+      startFloat: 'left',
+      endFloat: 'right',
       floatBoxOrigin(halfRect, columnBox, polygonBlockSpan) {
         // 縦書き: box 物理 X 範囲 = (column 右端 - polygonBlockSpan) ~ column 右端
         return {
