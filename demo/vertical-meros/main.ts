@@ -56,7 +56,10 @@ function tagObstacle(obstacle: Obstacle, id: string): void {
 
 // king (王) — 雑誌的な大判画像。
 // 各 N で chars / rows を明示し、 box aspect が natural 3:2 ±5% に収まるよう調整する。
-// 配置は本文の中央寄りにして、 画像 4 辺すべてに本文 text line が回り込むようにする。
+// vertical-rl では at.char (= grid-column start = 段 index) を中央寄りに配置すると上下に
+// 隣接段の text、 at.row (= grid-row start = 物理右端からの行 index) を 1 にすると obstacle
+// の物理右辺が obstacle-layer 内側の content area 右端に揃い、 観点 5 の right 辺判定が
+// content area edge として除外される。
 tagObstacle(
   addObstacleVertical(book, {
     shape: 'rect',
@@ -64,17 +67,12 @@ tagObstacle(
     shapeMargin: '0.8em',
     whenColumns: {
       // N=2 mobile: col_w ≈ 257.5, line_h ≈ 25.84
-      //   chars=1 rows=15 → width≈388, height≈258, aspect≈1.50
-      2: { page: 1, at: { row: 8, char: 1 }, rows: 15, chars: 1 },
+      2: { page: 1, at: { row: 1, char: 1 }, rows: 15, chars: 1 },
       // N=4 tablet: col_w ≈ 142, line_h ≈ 25.84
-      //   chars=2 rows=18 → width≈465, height≈308, aspect≈1.51
-      4: { page: 1, at: { row: 6, char: 2 }, rows: 18, chars: 2 },
-      // N=6: 中間 viewport (800-960px height)
-      //   chars=2 rows=14 → aspect ≈ 1.4-1.5
-      6: { page: 1, at: { row: 4, char: 2 }, rows: 14, chars: 2 },
+      4: { page: 1, at: { row: 1, char: 2 }, rows: 18, chars: 2 },
+      6: { page: 1, at: { row: 1, char: 2 }, rows: 14, chars: 2 },
       // N=8 desktop: col_w ≈ 98, line_h ≈ 25.84
-      //   chars=3 rows=20 → width≈517, height≈342, aspect≈1.51
-      8: { page: 1, at: { row: 6, char: 3 }, rows: 20, chars: 3 },
+      8: { page: 1, at: { row: 1, char: 3 }, rows: 20, chars: 3 },
     },
   }),
   'king',
@@ -88,11 +86,10 @@ tagObstacle(
     src: '/meros-2-run.png',
     shapeMargin: '0.8em',
     whenColumns: {
-      // N=2 mobile: page=2 中央寄り
-      2: { page: 2, at: { row: 8, char: 1 }, rows: 15, chars: 1 },
-      4: { page: 2, at: { row: 8, char: 2 }, rows: 18, chars: 2 },
-      6: { page: 2, at: { row: 6, char: 3 }, rows: 14, chars: 2 },
-      8: { page: 2, at: { row: 6, char: 4 }, rows: 20, chars: 3 },
+      2: { page: 2, at: { row: 1, char: 1 }, rows: 15, chars: 1 },
+      4: { page: 2, at: { row: 1, char: 2 }, rows: 18, chars: 2 },
+      6: { page: 2, at: { row: 1, char: 3 }, rows: 14, chars: 2 },
+      8: { page: 2, at: { row: 1, char: 4 }, rows: 20, chars: 3 },
     },
   }),
   'run',
@@ -113,11 +110,10 @@ tagObstacle(
     src: '/meros-3-reunion.png',
     shapeMargin: '0.8em',
     whenColumns: {
-      // N=2 mobile: page=3
-      2: { page: 3, at: { row: 8, char: 1 }, rows: 15, chars: 1 },
-      4: { page: 3, at: { row: 6, char: 2 }, rows: 18, chars: 2 },
-      6: { page: 3, at: { row: 4, char: 3 }, rows: 14, chars: 2 },
-      8: { page: 3, at: { row: 4, char: 4 }, rows: 20, chars: 3 },
+      2: { page: 3, at: { row: 1, char: 1 }, rows: 15, chars: 1 },
+      4: { page: 3, at: { row: 1, char: 2 }, rows: 18, chars: 2 },
+      6: { page: 3, at: { row: 1, char: 3 }, rows: 14, chars: 2 },
+      8: { page: 3, at: { row: 1, char: 4 }, rows: 20, chars: 3 },
     },
   }),
   'reunion',

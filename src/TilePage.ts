@@ -1011,49 +1011,6 @@ function createHorizontalHalfFloat(
   return el;
 }
 
-// 縦書き (vertical-rl) の 2 分割 float helper。
-// inline 軸 = 縦方向、 block 軸 = 横方向 (右→左) なので、 横書きの X 軸 split を Y 軸 split に置き換える。
-// - 上半分 (float:right): inline-start (column 上端) の block-start (右端) corner
-// - 下半分 (float:left):  inline-end   (column 下端) の block-start (右端) corner
-// shape の block 軸方向の覆い範囲 (= 横方向の polygon 幅) を blockSize ratio として渡す。
-function createVerticalHalfFloat(
-  halfPolygon: Point[],
-  columnBox: Rect,
-  halfYInPage: number,
-  halfHeightPx: number,
-  blockSizeRatio: number,
-  side: 'top' | 'bottom',
-  shapeMargin: string,
-): HTMLElement {
-  // vertical-rl の block 軸 = 横方向。 float box の物理 width = column.width * blockSizeRatio。
-  const floatWidthPx = columnBox.width * blockSizeRatio;
-  // shape は column の右端 (block-start) に貼り付くので、 float box の物理 origin X は
-  // column 右端から floatWidthPx 戻った位置。
-  const floatOriginX = columnBox.x + columnBox.width - floatWidthPx;
-  const floatOriginY = halfYInPage;
-  const inlineRatio = columnBox.height > 0 ? halfHeightPx / columnBox.height : 0;
-  const localPoints =
-    halfHeightPx > 0 && floatWidthPx > 0
-      ? halfPolygon
-          .map(([x, y]) => {
-            const lx = ((x - floatOriginX) / floatWidthPx) * 100;
-            const ly = ((y - floatOriginY) / halfHeightPx) * 100;
-            return `${lx.toFixed(4)}% ${ly.toFixed(4)}%`;
-          })
-          .join(', ')
-      : '';
-  const el = document.createElement('div');
-  el.className = 'tilepage-obstacle-float';
-  // vertical-rl では float:right = inline-start (top) / float:left = inline-end (bottom)。
-  el.style.float = side === 'top' ? 'right' : 'left';
-  // CSS の inline-size は writing-mode に従う。 vertical-rl では inline = 縦方向。
-  el.style.inlineSize = `${(inlineRatio * 100).toFixed(4)}%`;
-  el.style.blockSize = `${(blockSizeRatio * 100).toFixed(4)}%`;
-  if (localPoints) el.style.shapeOutside = `polygon(${localPoints})`;
-  el.style.shapeMargin = shapeMargin;
-  return el;
-}
-
 function reflowObstacles(page: Page): void {
   for (const obstacle of page.obstacles) {
     for (const f of obstacle.floats) f.remove();
@@ -1174,86 +1131,57 @@ function reflowObstacles(page: Page): void {
           obstacle.floats.push(spacer);
         }
       } else {
-        // vertical-rl: 横書きの 2 分割 + spacer 構造を block 軸 (上下) に swap した縦書きルート。
-        // inline 軸 = 縦方向 (top→bottom)、 block 軸 = 横方向 (right→left)。
-        // 横書きで X 軸中央で polygon を 2 分割 (left/right half) したのを、
-        // 縦書きでは Y 軸中央で 2 分割 (top/bottom half) する。
-        // 各 half float は block 軸方向 (= 横方向) に shape の覆い幅を持ち、
-        // shape-outside で text が上半/下半それぞれの周囲を流れる。
-        const minY = Math.min(...clipped.map(([, y]) => y));
-        const maxY = Math.max(...clipped.map(([, y]) => y));
-        const centerY = (minY + maxY) / 2;
+        // vertical-rl: 非矩形 shape (circle / polygon) でも text 回り込みは obstacle の矩形 bbox
+        // を基準にする。 polygon clip による float サイズ調整は inline-axis 端で float が
+        // 内側に縮み、 obstacle bbox の物理範囲と float bbox にずれが生じて text が obstacle
+        // 内側へ侵入するため。 shape-outside も Chromium の vertical-rl で polygon の % 軸解釈
+        // が安定せず使えない。
+        // column と obstacle bbox の矩形交差を取り、 inline-axis (= 縦) を上下 2 個の half float
+        // で覆う。 各 half は column inline-axis の 50% を占有し、 同 column 内 上下に並ぶことで
+        // 合計 100% を消費して text の inline 軸侵入を防ぐ。 block-axis (= 物理横) は obstacle
+        // の物理 width のみ占有し、 obstacle 物理左に隣接する text 流れを残す (= 左辺の近接)。
+        const obstacleRightX = obstacleBox.x + obstacleBox.width;
+        const intersectLeftX = Math.max(columnBox.x, obstacleBox.x);
+        const intersectRightX = Math.min(columnBox.x + columnBox.width, obstacleRightX);
+        const intersectTopY = Math.max(columnBox.y, obstacleBox.y);
+        const intersectBottomY = Math.min(
+          columnBox.y + columnBox.height,
+          obstacleBox.y + obstacleBox.height,
+        );
+        const intersectBlockSize = Math.max(0, intersectRightX - intersectLeftX);
+        const intersectInlineSize = Math.max(0, intersectBottomY - intersectTopY);
+        if (intersectBlockSize <= 0 || intersectInlineSize <= 0) continue;
+        const blockSizeRatio = columnBox.width > 0 ? intersectBlockSize / columnBox.width : 0;
+        // column 右端と obstacle 右端の差分を margin-block-start で吸収する。
+        const residualRight = Math.max(0, columnBox.x + columnBox.width - intersectRightX);
 
-        // 上半分 = 縦軸の inline-start (= 列の上端) 〜 centerY。
-        const topRect: Rect = {
-          x: columnBox.x,
-          y: columnBox.y,
-          width: columnBox.width,
-          height: centerY - columnBox.y,
-        };
-        // 下半分 = centerY 〜 inline-end (= 列の下端)。
-        const bottomRect: Rect = {
-          x: columnBox.x,
-          y: centerY,
-          width: columnBox.width,
-          height: columnBox.y + columnBox.height - centerY,
-        };
+        // top half: float:right (= inline-start に attach)、 inline-size 50%。
+        const topF = document.createElement('div');
+        topF.className = 'tilepage-obstacle-float';
+        topF.style.float = 'right';
+        topF.style.inlineSize = '50%';
+        topF.style.blockSize = `${(blockSizeRatio * 100).toFixed(4)}%`;
+        if (residualRight > 0) {
+          topF.style.marginBlockStart = `${residualRight.toFixed(2)}px`;
+        }
+        topF.style.marginBlockEnd = obstacle.shapeMargin;
+        // bottom half: float:left (= inline-end に attach)、 inline-size 50%。
+        const botF = document.createElement('div');
+        botF.className = 'tilepage-obstacle-float';
+        botF.style.float = 'left';
+        botF.style.inlineSize = '50%';
+        botF.style.blockSize = `${(blockSizeRatio * 100).toFixed(4)}%`;
+        if (residualRight > 0) {
+          botF.style.marginBlockStart = `${residualRight.toFixed(2)}px`;
+        }
+        botF.style.marginBlockEnd = obstacle.shapeMargin;
 
-        const topHalf = clipPolygonByRect(clipped, topRect);
-        const bottomHalf = clipPolygonByRect(clipped, bottomRect);
-
-        // shape が block 軸 (= 横方向) で占有する column 内の比率。
-        // 縦書きの「block-end」は左端なので、 polygon leftmost X から column 右端までが占有幅。
-        const polygonLeftX = Math.min(...clipped.map(([x]) => x));
-        const blockSizeRatio =
-          columnBox.width > 0
-            ? (columnBox.x + columnBox.width - polygonLeftX) / columnBox.width
-            : 0;
-        // 縦書きの residual = polygon 左端 (block-end) と column 左端の隙間 (1 行未満なら spacer 化)。
-        const residualLeft = polygonLeftX - columnBox.x;
-        const fillResidualVertical =
-          lineHeightPx > 0 && residualLeft > 0 && residualLeft < lineHeightPx;
-
-        // DOM 順: [topFloat (float:right), bottomFloat (float:left), spacer (float:right)]。
-        // float:right は inline-start (top) に、 float:left は inline-end (bottom) に attach する。
-        // spacer は block 軸方向に余り分を埋めるため block-size 100% の float:right で挿入する。
         const anchor = col.firstChild;
-        if (topHalf.length >= 3 && topRect.height > 0) {
-          const f = createVerticalHalfFloat(
-            topHalf,
-            columnBox,
-            topRect.y,
-            topRect.height,
-            blockSizeRatio,
-            'top',
-            obstacle.shapeMargin,
-          );
-          col.insertBefore(f, anchor);
-          obstacle.floats.push(f);
-        }
-        if (bottomHalf.length >= 3 && bottomRect.height > 0) {
-          const f = createVerticalHalfFloat(
-            bottomHalf,
-            columnBox,
-            bottomRect.y,
-            bottomRect.height,
-            blockSizeRatio,
-            'bottom',
-            obstacle.shapeMargin,
-          );
-          col.insertBefore(f, anchor);
-          obstacle.floats.push(f);
-        }
-        if (fillResidualVertical) {
-          // 横方向の residual を埋める spacer。 inline-size (= 縦方向) 100% で float:right。
-          const spacer = document.createElement('div');
-          spacer.className = 'tilepage-obstacle-float';
-          spacer.style.float = 'right';
-          spacer.style.inlineSize = '100%';
-          spacer.style.blockSize = `${((residualLeft / columnBox.width) * 100).toFixed(4)}%`;
-          col.insertBefore(spacer, anchor);
-          obstacle.floats.push(spacer);
-        }
+        // DOM 順: [topF, botF, ...]。 topF が inline-start (物理 top) に、 botF が inline-end
+        // (物理 bottom) に attach され、 中央には text 流入の余地がない (inline 50%+50%=100%)。
+        col.insertBefore(topF, anchor);
+        col.insertBefore(botF, anchor);
+        obstacle.floats.push(topF, botF);
       }
     }
   }
