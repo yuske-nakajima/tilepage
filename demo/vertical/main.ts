@@ -1,4 +1,4 @@
-import { addFlow, addObstacle, addPage, createBook, VERSION } from '../../src';
+import { addFlow, addObstacleVertical, addPage, createBook, VERSION } from '../../src';
 
 // 縦書き (vertical-rl) book の目視確認用 demo。
 // 同一 flow engine が writing-mode の違いだけで縦書き band 配置に切り替わることを示す。
@@ -28,30 +28,45 @@ const longText =
   '矩形・円・任意多角形の 3 形状の obstacle が CSS Grid 仕様通りに軸 swap される。' +
   'TilePage v0.4 のメンタルモデル: A book is pages. A page is a viewport. Place rectangles. Pour text.';
 
-function makePage(title: string, shape: Parameters<typeof addObstacle>[1]['shape']) {
+// 各 page に shape 違いの obstacle を 1 つずつ載せる。
+// 縦書きの whenColumns variant では at.row = 段組み相対の段番号 (= 物理 grid-column-start)、
+// at.char = 文字位置、 rows = 段組み span、 chars = 文字幅 span。
+const SHAPES = [
+  { title: 'vertical-rl — rect', shape: 'rect' as const },
+  { title: 'vertical-rl — circle', shape: 'circle' as const },
+  {
+    title: 'vertical-rl — polygon (diamond)',
+    shape: {
+      type: 'polygon' as const,
+      points: [
+        [0.5, 0],
+        [1, 0.5],
+        [0.5, 1],
+        [0, 0.5],
+      ] as ReadonlyArray<readonly [number, number]>,
+    },
+  },
+];
+
+for (let i = 0; i < SHAPES.length; i++) {
   const page = addPage(book);
   const heading = document.createElement('div');
   heading.className = 'demo-page-title';
-  heading.textContent = title;
+  heading.textContent = SHAPES[i].title;
   page.element.appendChild(heading);
 
-  addObstacle(page, {
-    at: { col: '2-3', row: '1-2' },
-    shape,
+  addObstacleVertical(book, {
+    shape: SHAPES[i].shape,
     shapeMargin: '0.8em',
+    whenColumns: {
+      4: {
+        page: i + 1,
+        at: { row: 2, char: 1 },
+        rows: 2,
+        chars: 2,
+      },
+    },
   });
 }
-
-makePage('vertical-rl — rect', 'rect');
-makePage('vertical-rl — circle', 'circle');
-makePage('vertical-rl — polygon (diamond)', {
-  type: 'polygon',
-  points: [
-    [0.5, 0],
-    [1, 0.5],
-    [0.5, 1],
-    [0, 0.5],
-  ],
-});
 
 addFlow(book, { text: longText.repeat(2) });

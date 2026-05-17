@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { addFlow, addObstacle, addPage, createBook } from '../TilePage';
+import { addFlow, addObstacleHorizontal, addPage, createBook } from '../TilePage';
 
-// addObstacle 後の再分配経路を検証する。
+// addObstacleHorizontal/Vertical 後の再分配経路を検証する。
 // observeResize: true なら _reflow controller の request が呼ばれる。
 // observeResize: false でも source text が流れていれば同期的に runDistribute される。
 
@@ -19,8 +19,8 @@ beforeEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('addObstacle 再分配経路', () => {
-  it('observeResize: false でも source text 投入後の addObstacle で同期再分配が走る', () => {
+describe('addObstacleHorizontal 再分配経路', () => {
+  it('observeResize: false でも source text 投入後の addObstacleHorizontal で同期再分配が走る', () => {
     const container = document.createElement('div');
     document.body.appendChild(container);
 
@@ -31,8 +31,13 @@ describe('addObstacle 再分配経路', () => {
       observeResize: false,
     });
     // page を obstacle で「user 配置」と marker しておく → trimPagesAfter に保持される。
-    const page = addPage(book);
-    addObstacle(page, { at: { col: '1', row: '1' }, shape: 'rect' });
+    addPage(book);
+    addObstacleHorizontal(book, {
+      shape: 'rect',
+      whenColumns: {
+        3: { page: 1, at: { col: 1, line: 1 }, cols: 1, lines: 1 },
+      },
+    });
 
     // source text を流す。controller は作られない (observeResize: false)。
     addFlow(book, { text: 'abcdefghij' });
@@ -40,7 +45,7 @@ describe('addObstacle 再分配経路', () => {
     expect(book.pages.length).toBeGreaterThanOrEqual(1);
 
     // 各 column の flow-text holder への textContent set 回数を計測する。
-    // addObstacle 後に再度書き込みが発生すれば再分配の証拠。
+    // addObstacleHorizontal 後に再度書き込みが発生すれば再分配の証拠。
     let writeCount = 0;
     const desc = Object.getOwnPropertyDescriptor(Node.prototype, 'textContent');
     if (!desc?.set || !desc.get) throw new Error('Node.prototype.textContent descriptor missing');
@@ -63,12 +68,17 @@ describe('addObstacle 再分配経路', () => {
     const writesBefore = writeCount;
 
     // 別の obstacle を追加 → observeResize:false でも runDistribute が同期で呼ばれる。
-    addObstacle(book.pages[0], { at: { col: '2', row: '1' }, shape: 'rect' });
+    addObstacleHorizontal(book, {
+      shape: 'rect',
+      whenColumns: {
+        3: { page: 1, at: { col: 2, line: 1 }, cols: 1, lines: 1 },
+      },
+    });
 
     expect(writeCount).toBeGreaterThan(writesBefore);
   });
 
-  it('source text が無い addObstacle では再分配経路を呼ばない (空の book は壊さない)', () => {
+  it('source text が無い addObstacleHorizontal では再分配経路を呼ばない (空の book は壊さない)', () => {
     const container = document.createElement('div');
     document.body.appendChild(container);
 
@@ -78,15 +88,22 @@ describe('addObstacle 再分配経路', () => {
       writingMode: 'horizontal-tb',
       observeResize: false,
     });
-    const page = addPage(book);
+    addPage(book);
 
     expect(book._sourceText).toBe('');
     expect(book._reflow).toBeUndefined();
 
-    expect(() => addObstacle(page, { at: { col: '1', row: '1' }, shape: 'rect' })).not.toThrow();
+    expect(() =>
+      addObstacleHorizontal(book, {
+        shape: 'rect',
+        whenColumns: {
+          2: { page: 1, at: { col: 1, line: 1 }, cols: 1, lines: 1 },
+        },
+      }),
+    ).not.toThrow();
   });
 
-  it('observeResize: true なら addObstacle 後に _reflow.request が呼ばれる', () => {
+  it('observeResize: true なら addObstacleHorizontal 後に _reflow.request が呼ばれる', () => {
     const container = document.createElement('div');
     document.body.appendChild(container);
 
@@ -96,9 +113,13 @@ describe('addObstacle 再分配経路', () => {
       writingMode: 'horizontal-tb',
       observeResize: true,
     });
-    // obstacle で marker。
-    const page = addPage(book);
-    addObstacle(page, { at: { col: '1', row: '1' }, shape: 'rect' });
+    addPage(book);
+    addObstacleHorizontal(book, {
+      shape: 'rect',
+      whenColumns: {
+        2: { page: 1, at: { col: 1, line: 1 }, cols: 1, lines: 1 },
+      },
+    });
 
     addFlow(book, { text: 'abcdef' });
 
@@ -106,7 +127,12 @@ describe('addObstacle 再分配経路', () => {
     if (!reflow) throw new Error('reflow controller が未初期化');
     const requestSpy = vi.spyOn(reflow, 'request');
 
-    addObstacle(book.pages[0], { at: { col: '2', row: '1' }, shape: 'rect' });
+    addObstacleHorizontal(book, {
+      shape: 'rect',
+      whenColumns: {
+        2: { page: 1, at: { col: 2, line: 1 }, cols: 1, lines: 1 },
+      },
+    });
 
     expect(requestSpy).toHaveBeenCalled();
   });

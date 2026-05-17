@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { addFlow, addObstacle, addPage, createBook } from '../TilePage';
+import { addFlow, addObstacleVertical, addPage, createBook } from '../TilePage';
 
 // trimPagesAfter は stream の余りが無い page を末尾から削るが、
 // obstacle を持つ page は user が明示配置したものと見做して保持する。
-// demo/vertical/main.ts のように 3 つの obstacle page を作って short text を流した場合、
+// 縦書き 3 page に shape 違い obstacle を載せて short text を流した場合、
 // circle / polygon page が消えてはならない。
 
 class FakeResizeObserver {
@@ -35,14 +35,24 @@ describe('trimPagesAfter safeguard (obstacle page を刈らない)', () => {
       observeResize: false,
     });
 
-    // demo/vertical/main.ts と同じ構造で 3 page 作って obstacle を置く。
-    const p1 = addPage(book);
-    addObstacle(p1, { at: { col: '2-3', row: '1-2' }, shape: 'rect' });
-    const p2 = addPage(book);
-    addObstacle(p2, { at: { col: '2-3', row: '1-2' }, shape: 'circle' });
-    const p3 = addPage(book);
-    addObstacle(p3, {
-      at: { col: '2-3', row: '1-2' },
+    // 3 page 作って obstacle を載せる。 縦書き whenColumns で page=1/2/3 に振り分ける。
+    addPage(book);
+    addPage(book);
+    addPage(book);
+
+    addObstacleVertical(book, {
+      shape: 'rect',
+      whenColumns: {
+        4: { page: 1, at: { row: 2, char: 1 }, rows: 2, chars: 2 },
+      },
+    });
+    addObstacleVertical(book, {
+      shape: 'circle',
+      whenColumns: {
+        4: { page: 2, at: { row: 2, char: 1 }, rows: 2, chars: 2 },
+      },
+    });
+    addObstacleVertical(book, {
       shape: {
         type: 'polygon',
         points: [
@@ -51,6 +61,9 @@ describe('trimPagesAfter safeguard (obstacle page を刈らない)', () => {
           [0.5, 1],
           [0, 0.5],
         ],
+      },
+      whenColumns: {
+        4: { page: 3, at: { row: 2, char: 1 }, rows: 2, chars: 2 },
       },
     });
 

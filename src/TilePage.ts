@@ -50,7 +50,7 @@ export interface Book {
   // addFlow が呼ばれた時点で初期化される。
   _reflow?: ReflowController;
   _observeResize: boolean;
-  // addObstacle(book, ...) で登録された whenColumns 持ち obstacle 群。
+  // addObstacleHorizontal/Vertical(book, ...) で登録された whenColumns 持ち obstacle 群。
   // N 変化時に resolveVariantsForBook で再評価され、 page 間を移動する。
   _variantObstacles: Obstacle[];
 }
@@ -74,8 +74,9 @@ export interface GridPos {
   row: string;
 }
 
-// 段数 N が一致した時に採用される配置 variant。
+// 段数 N が一致した時に採用される配置 variant (内部表現)。
 // at.col / at.line は 1-indexed。 line は obstacle-layer の auto-fill row index。
+// 縦書き variant は内部でこの形式に正規化される (at.row→line, at.char→col, rows→lines, chars→cols)。
 // lines / aspect の解決優先順位:
 //   1. aspect 指定あり → cols から lines を導出 (lines も指定されていれば warn して aspect 優先)
 //   2. aspect 未指定で lines 指定 → そのまま
@@ -90,11 +91,45 @@ export interface WhenColumnsVariant {
   aspect?: string;
 }
 
+// 公開 API: 横書き variant。 cols=段組み相対の幅 (grid-column span)。
+export interface HorizontalWhenColumnsVariant {
+  page: number;
+  at: { col: number; line: number };
+  cols: number;
+  lines?: number;
+  aspect?: string;
+}
+
+// 公開 API: 縦書き variant。 rows=段組み相対の高さ (内部で grid-row span にマップされる)。
+// field 名を `cols/lines` から `rows/chars` に変えることで axis swap を型レベルで強制する。
+export interface VerticalWhenColumnsVariant {
+  page: number;
+  at: { row: number; char: number };
+  rows: number;
+  chars?: number;
+  aspect?: string;
+}
+
+export interface BaseObstacleOptions {
+  shape?: ObstacleShape;
+  src?: string;
+  alt?: string;
+  element?: HTMLElement;
+  shapeMargin?: string;
+  syncClipPath?: boolean;
+}
+
+export interface HorizontalObstacleOptions extends BaseObstacleOptions {
+  whenColumns: Partial<Record<number, HorizontalWhenColumnsVariant>>;
+}
+
+export interface VerticalObstacleOptions extends BaseObstacleOptions {
+  whenColumns: Partial<Record<number, VerticalWhenColumnsVariant>>;
+}
+
+// 内部用 (legacy page-level path / 正規化後形)。 公開 API ではない。
 export interface ObstacleOptions {
-  // legacy: 物理 row 番号で配置する経路。 whenColumns 未指定時のみ有効。
   at?: GridPos;
-  // 段数 N → variant の辞書。 現在の N に一致する variant が選ばれる。
-  // 未一致 N では obstacle が display:none で隠れる (graceful degradation)。
   whenColumns?: Record<number, WhenColumnsVariant>;
   element?: HTMLElement;
   src?: string;
@@ -312,70 +347,91 @@ export function addPage(book: Book, options: PageOptions = {}): Page {
   return pageObj;
 }
 
-// addObstacle は 2 つの呼び出し方を持つ。
-// - addObstacle(page, options): legacy 経路。 options.at の物理 row 番号で配置する。
-// - addObstacle(book, options): whenColumns 経路。 現在 N に対応する variant が
-//   選ばれ、 未一致 N では display:none で隠れる (graceful degradation)。
-export function addObstacle(page: Page, options: ObstacleOptions): Obstacle;
-export function addObstacle(book: Book, options: ObstacleOptions): Obstacle;
-export function addObstacle(target: Page | Book, options: ObstacleOptions): Obstacle {
-  if (isBook(target)) return addObstacleToBook(target, options);
-  return addObstacleToPage(target, options);
-}
-
-// 第一引数の Book / Page 判別。 Book は _variantObstacles を必ず持つ。
-function isBook(target: Page | Book): target is Book {
-  return '_variantObstacles' in target;
-}
-
-function addObstacleToPage(page: Page, options: ObstacleOptions): Obstacle {
-  if (!options.at) {
-    throw new Error('addObstacle(page, ...): options.at is required (legacy path)');
+// 公開 API: 横書き専用 obstacle 配置。
+// whenColumns 経路で、 段数 N と一致する variant が選ばれる。
+// 未一致 N では obstacle が display:none で隠れる (graceful degradation)。
+export function addObstacleHorizontal(book: Book, options: HorizontalObstacleOptions): Obstacle {
+  if (!options.whenColumns) {
+    throw new Error('addObstacleHorizontal(book, ...): options.whenColumns is required');
   }
-  if (options.whenColumns) {
-    throw new Error('addObstacle(page, ...): options.whenColumns must be used with book argument');
-  }
-  const el = createObstacleElement(options);
-  const polygon = normalizeShape(options.shape ?? 'rect');
-  applyClipPath(el, options.shape, polygon);
-
-  const colRange = parseGridRange(options.at.col);
-  const rowRange = parseGridRange(options.at.row);
-  el.style.gridColumn = `${colRange[0]} / ${colRange[1]}`;
-  el.style.gridRow = `${rowRange[0]} / ${rowRange[1]}`;
-  page.obstacleLayer.appendChild(el);
-
-  const obstacle: Obstacle = {
-    element: el,
-    colRange,
-    rowRange,
-    floats: [],
-    shapeMargin: options.shapeMargin ?? '0',
-    polygon,
+  const internal: ObstacleOptions = {
+    ...options,
+    whenColumns: normalizeHorizontalWhenColumns(options.whenColumns),
   };
-  page.obstacles.push(obstacle);
+  return addObstacleToBook(book, internal);
+}
 
-  if (el.tagName === 'IMG' && !(el as HTMLImageElement).complete) {
-    el.addEventListener(
-      'load',
-      () => {
-        reflowObstacles(page);
-        page.book._reflow?.request();
-      },
-      { once: true },
-    );
+// 公開 API: 縦書き専用 obstacle 配置。
+// at.row / at.char / rows / chars を内部 grid に物理 swap してマップする。
+export function addObstacleVertical(book: Book, options: VerticalObstacleOptions): Obstacle {
+  if (!options.whenColumns) {
+    throw new Error('addObstacleVertical(book, ...): options.whenColumns is required');
   }
-  reflowObstacles(page);
-  triggerRedistribute(page.book);
-  return obstacle;
+  const internal: ObstacleOptions = {
+    ...options,
+    whenColumns: normalizeVerticalWhenColumns(options.whenColumns),
+  };
+  return addObstacleToBook(book, internal);
+}
+
+// 縦書き public variant 群を内部 WhenColumnsVariant 形式に正規化する。
+// API 層の axis swap 吸収はここで行う:
+//   at.row  → at.line       (段組み相対 = grid-row-start)
+//   at.char → at.col        (文字位置  = grid-column-start)
+//   rows    → cols          (= grid-row span)   ※ 「段組み相対の高さ」
+//   chars   → lines         (= grid-column span)※ 「幅」 (省略時 aspect/natural から導出)
+// 注意: 内部 WhenColumnsVariant の cols/lines は CSS span に直結する物理座標であり、
+// 縦書きの「段組み相対の高さ」を rows、「幅」を chars に対応させる。
+// 縦書きの reflow / clamp 計算は内部 cols/lines を grid 物理軸として扱うので、
+// "縦書きの cols" は内部 cols = grid-column span (= 文字幅方向) になることに注意。
+function normalizeVerticalWhenColumns(
+  whenColumns: Partial<Record<number, VerticalWhenColumnsVariant>>,
+): Record<number, WhenColumnsVariant> {
+  const out: Record<number, WhenColumnsVariant> = {};
+  for (const key of Object.keys(whenColumns)) {
+    const n = Number.parseInt(key, 10);
+    const v = whenColumns[n];
+    if (!v) continue;
+    // 縦書き: rows が段組み相対の「block 軸 (横方向 right→left)」 span。
+    //         chars が「inline 軸 (縦方向 top→bottom)」 span。
+    // 内部 WhenColumnsVariant は cols=grid-column span, lines=grid-row span を意味する。
+    // 物理 grid-row = 縦方向 = inline 軸 (chars) → lines = chars
+    // 物理 grid-column = 横方向 = block 軸 (rows) → cols = rows
+    // つまり 内部 cols ← v.rows, 内部 lines ← v.chars。 at.col ← v.at.row, at.line ← v.at.char。
+    // (v.at.row は段組み相対 row 番号 = 物理 grid-column-start に流れる)
+    out[n] = {
+      page: v.page,
+      at: { col: v.at.row, line: v.at.char },
+      cols: v.rows,
+      lines: v.chars,
+      aspect: v.aspect,
+    };
+  }
+  return out;
+}
+
+// 横書き public variant 群を内部形式に正規化する (field 名一致のため shallow copy)。
+function normalizeHorizontalWhenColumns(
+  whenColumns: Partial<Record<number, HorizontalWhenColumnsVariant>>,
+): Record<number, WhenColumnsVariant> {
+  const out: Record<number, WhenColumnsVariant> = {};
+  for (const key of Object.keys(whenColumns)) {
+    const n = Number.parseInt(key, 10);
+    const v = whenColumns[n];
+    if (!v) continue;
+    out[n] = v;
+  }
+  return out;
 }
 
 function addObstacleToBook(book: Book, options: ObstacleOptions): Obstacle {
   if (!options.whenColumns) {
-    throw new Error('addObstacle(book, ...): options.whenColumns is required');
+    throw new Error('addObstacleHorizontal/Vertical: options.whenColumns is required');
   }
   if (options.at) {
-    throw new Error('addObstacle(book, ...): options.at must not be combined with whenColumns');
+    throw new Error(
+      'addObstacleHorizontal/Vertical: options.at must not be combined with whenColumns',
+    );
   }
   const el = createObstacleElement(options);
   const polygon = normalizeShape(options.shape ?? 'rect');
@@ -907,6 +963,49 @@ function createHorizontalHalfFloat(
   return el;
 }
 
+// 縦書き (vertical-rl) の 2 分割 float helper。
+// inline 軸 = 縦方向、 block 軸 = 横方向 (右→左) なので、 横書きの X 軸 split を Y 軸 split に置き換える。
+// - 上半分 (float:right): inline-start (column 上端) の block-start (右端) corner
+// - 下半分 (float:left):  inline-end   (column 下端) の block-start (右端) corner
+// shape の block 軸方向の覆い範囲 (= 横方向の polygon 幅) を blockSize ratio として渡す。
+function createVerticalHalfFloat(
+  halfPolygon: Point[],
+  columnBox: Rect,
+  halfYInPage: number,
+  halfHeightPx: number,
+  blockSizeRatio: number,
+  side: 'top' | 'bottom',
+  shapeMargin: string,
+): HTMLElement {
+  // vertical-rl の block 軸 = 横方向。 float box の物理 width = column.width * blockSizeRatio。
+  const floatWidthPx = columnBox.width * blockSizeRatio;
+  // shape は column の右端 (block-start) に貼り付くので、 float box の物理 origin X は
+  // column 右端から floatWidthPx 戻った位置。
+  const floatOriginX = columnBox.x + columnBox.width - floatWidthPx;
+  const floatOriginY = halfYInPage;
+  const inlineRatio = columnBox.height > 0 ? halfHeightPx / columnBox.height : 0;
+  const localPoints =
+    halfHeightPx > 0 && floatWidthPx > 0
+      ? halfPolygon
+          .map(([x, y]) => {
+            const lx = ((x - floatOriginX) / floatWidthPx) * 100;
+            const ly = ((y - floatOriginY) / halfHeightPx) * 100;
+            return `${lx.toFixed(4)}% ${ly.toFixed(4)}%`;
+          })
+          .join(', ')
+      : '';
+  const el = document.createElement('div');
+  el.className = 'tilepage-obstacle-float';
+  // vertical-rl では float:right = inline-start (top) / float:left = inline-end (bottom)。
+  el.style.float = side === 'top' ? 'right' : 'left';
+  // CSS の inline-size は writing-mode に従う。 vertical-rl では inline = 縦方向。
+  el.style.inlineSize = `${(inlineRatio * 100).toFixed(4)}%`;
+  el.style.blockSize = `${(blockSizeRatio * 100).toFixed(4)}%`;
+  if (localPoints) el.style.shapeOutside = `polygon(${localPoints})`;
+  el.style.shapeMargin = shapeMargin;
+  return el;
+}
+
 function reflowObstacles(page: Page): void {
   for (const obstacle of page.obstacles) {
     for (const f of obstacle.floats) f.remove();
@@ -1027,37 +1126,86 @@ function reflowObstacles(page: Page): void {
           obstacle.floats.push(spacer);
         }
       } else {
-        // vertical-rl は inline 軸が縦になるため split 軸も swap される。
-        // 本実装では horizontal-tb のみ 2 分割対応とし、 縦書きは従来の単一 float のまま。
-        const floatWidthRatio =
+        // vertical-rl: 横書きの 2 分割 + spacer 構造を block 軸 (上下) に swap した縦書きルート。
+        // inline 軸 = 縦方向 (top→bottom)、 block 軸 = 横方向 (right→left)。
+        // 横書きで X 軸中央で polygon を 2 分割 (left/right half) したのを、
+        // 縦書きでは Y 軸中央で 2 分割 (top/bottom half) する。
+        // 各 half float は block 軸方向 (= 横方向) に shape の覆い幅を持ち、
+        // shape-outside で text が上半/下半それぞれの周囲を流れる。
+        const minY = Math.min(...clipped.map(([, y]) => y));
+        const maxY = Math.max(...clipped.map(([, y]) => y));
+        const centerY = (minY + maxY) / 2;
+
+        // 上半分 = 縦軸の inline-start (= 列の上端) 〜 centerY。
+        const topRect: Rect = {
+          x: columnBox.x,
+          y: columnBox.y,
+          width: columnBox.width,
+          height: centerY - columnBox.y,
+        };
+        // 下半分 = centerY 〜 inline-end (= 列の下端)。
+        const bottomRect: Rect = {
+          x: columnBox.x,
+          y: centerY,
+          width: columnBox.width,
+          height: columnBox.y + columnBox.height - centerY,
+        };
+
+        const topHalf = clipPolygonByRect(clipped, topRect);
+        const bottomHalf = clipPolygonByRect(clipped, bottomRect);
+
+        // shape が block 軸 (= 横方向) で占有する column 内の比率。
+        // 縦書きの「block-end」は左端なので、 polygon leftmost X から column 右端までが占有幅。
+        const polygonLeftX = Math.min(...clipped.map(([x]) => x));
+        const blockSizeRatio =
           columnBox.width > 0
-            ? (columnBox.x + columnBox.width - Math.min(...clipped.map(([x]) => x))) /
-              columnBox.width
+            ? (columnBox.x + columnBox.width - polygonLeftX) / columnBox.width
             : 0;
-        const floatHeightRatio = 1;
-        const floatOriginX = columnBox.x + columnBox.width * (1 - floatWidthRatio);
-        const floatOriginY = columnBox.y;
-        const floatWidthPx = columnBox.width * floatWidthRatio;
-        const floatHeightPx = columnBox.height * floatHeightRatio;
-        const localPoints =
-          floatWidthPx > 0 && floatHeightPx > 0
-            ? clipped
-                .map(([x, y]) => {
-                  const lx = ((x - floatOriginX) / floatWidthPx) * 100;
-                  const ly = ((y - floatOriginY) / floatHeightPx) * 100;
-                  return `${lx.toFixed(4)}% ${ly.toFixed(4)}%`;
-                })
-                .join(', ')
-            : '';
-        const float = document.createElement('div');
-        float.className = 'tilepage-obstacle-float';
-        float.style.float = 'right';
-        float.style.inlineSize = `${(floatWidthRatio * 100).toFixed(4)}%`;
-        float.style.blockSize = `${(floatHeightRatio * 100).toFixed(4)}%`;
-        if (localPoints) float.style.shapeOutside = `polygon(${localPoints})`;
-        float.style.shapeMargin = obstacle.shapeMargin;
-        col.insertBefore(float, col.firstChild);
-        obstacle.floats.push(float);
+        // 縦書きの residual = polygon 左端 (block-end) と column 左端の隙間 (1 行未満なら spacer 化)。
+        const residualLeft = polygonLeftX - columnBox.x;
+        const fillResidualVertical =
+          lineHeightPx > 0 && residualLeft > 0 && residualLeft < lineHeightPx;
+
+        // DOM 順: [topFloat (float:right), bottomFloat (float:left), spacer (float:right)]。
+        // float:right は inline-start (top) に、 float:left は inline-end (bottom) に attach する。
+        // spacer は block 軸方向に余り分を埋めるため block-size 100% の float:right で挿入する。
+        const anchor = col.firstChild;
+        if (topHalf.length >= 3 && topRect.height > 0) {
+          const f = createVerticalHalfFloat(
+            topHalf,
+            columnBox,
+            topRect.y,
+            topRect.height,
+            blockSizeRatio,
+            'top',
+            obstacle.shapeMargin,
+          );
+          col.insertBefore(f, anchor);
+          obstacle.floats.push(f);
+        }
+        if (bottomHalf.length >= 3 && bottomRect.height > 0) {
+          const f = createVerticalHalfFloat(
+            bottomHalf,
+            columnBox,
+            bottomRect.y,
+            bottomRect.height,
+            blockSizeRatio,
+            'bottom',
+            obstacle.shapeMargin,
+          );
+          col.insertBefore(f, anchor);
+          obstacle.floats.push(f);
+        }
+        if (fillResidualVertical) {
+          // 横方向の residual を埋める spacer。 inline-size (= 縦方向) 100% で float:right。
+          const spacer = document.createElement('div');
+          spacer.className = 'tilepage-obstacle-float';
+          spacer.style.float = 'right';
+          spacer.style.inlineSize = '100%';
+          spacer.style.blockSize = `${((residualLeft / columnBox.width) * 100).toFixed(4)}%`;
+          col.insertBefore(spacer, anchor);
+          obstacle.floats.push(spacer);
+        }
       }
     }
   }
