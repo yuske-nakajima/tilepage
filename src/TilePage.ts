@@ -82,6 +82,12 @@ export interface GridPos {
 //   2. aspect 未指定で lines 指定 → そのまま
 //   3. 両方未指定 → 画像 natural aspect (img.naturalWidth / img.naturalHeight) から導出
 //      画像以外 / natural が取れない場合は FALLBACK_LINES (= 4)
+//
+// 縦書き正規化: vertical-rl では CSS Grid が writing-mode に従い軸 swap するため、
+// `grid-column span` (= 内部 cols) が「段組みの段 (column band)」 = 段の数を span する。
+// よって縦書き public API では `chars` を必須 (= 段の数 = 横書き cols 相当)、
+// `rows` を省略可 (= block 軸 line 数 = 横書き lines 相当、 aspect から自動導出可) にして
+// 横書きと完全対称にする。
 export interface WhenColumnsVariant {
   page: number;
   at: { col: number; line: number };
@@ -89,9 +95,6 @@ export interface WhenColumnsVariant {
   lines?: number;
   // 'W/H' (例: '3/4', '16/9')。 W, H は正の数値文字列。 パース失敗は warn して未指定扱い。
   aspect?: string;
-  // 内部 marker。 縦書き normalize で chars 省略時に true。 attach 時に lines + aspect から
-  // cols を逆算する経路を駆動する。 公開 API には現れない。
-  _colsFromAspect?: boolean;
 }
 
 // 公開 API: 横書き variant。 cols=段組み相対の幅 (grid-column span)。
@@ -103,13 +106,16 @@ export interface HorizontalWhenColumnsVariant {
   aspect?: string;
 }
 
-// 公開 API: 縦書き variant。 rows=段組み相対の高さ (内部で grid-row span にマップされる)。
-// field 名を `cols/lines` から `rows/chars` に変えることで axis swap を型レベルで強制する。
+// 公開 API: 縦書き variant。
+// vertical-rl では CSS Grid の grid-template-columns が inline 軸 (= 物理 Y 軸) を N 等分し、
+// `grid-column span` = 「段組みの段の数」 をそのまま表す (横書きの cols と同じ意味)。
+// よって `chars` が「段の数」 必須、 `rows` (block 軸 line 数) は aspect から自動導出可能で省略可。
+// field 名を `cols/lines` から `rows/chars` に分けることで API 利用者の混乱を避ける。
 export interface VerticalWhenColumnsVariant {
   page: number;
   at: { row: number; char: number };
-  rows: number;
-  chars?: number;
+  rows?: number;
+  chars: number;
   aspect?: string;
 }
 
@@ -378,19 +384,23 @@ export function addObstacleVertical(book: Book, options: VerticalObstacleOptions
 }
 
 // 縦書き public variant 群を内部 WhenColumnsVariant 形式に正規化する。
-// v2 md 3-3 の表通りにマップする:
+// マッピング:
 //   at.row  → grid-row-start    → 内部 at.line
 //   at.char → grid-column-start → 内部 at.col
-//   rows    → grid-row span     → 内部 lines
-//   chars   → grid-column span  → 内部 cols
+//   rows    → grid-row span     → 内部 lines (= 横書きの lines と同じ logical block 軸 span)
+//   chars   → grid-column span  → 内部 cols  (= 横書きの cols と同じ logical inline 軸 span = 段の数)
 // 内部 WhenColumnsVariant の cols/lines は CSS span に直結する logical 軸 span で、
-//   cols  = grid-column span (= inline 軸 span)
+//   cols  = grid-column span (= inline 軸 span = 段の数)
 //   lines = grid-row span    (= block  軸 span)
 // CSS Grid は writing-mode に従い軸 swap されるため、 横書き / 縦書き共通の logical 軸で扱える。
 //
-// chars 省略時の挙動: cols には placeholder (1) を入れ、 _colsFromAspect マーカーを立てる。
-// attach 時に resolveColsFromLines で aspect / natural aspect から cols を逆算する。
-// 横書きでの aspect 自動導出 (resolveLines: cols + aspect → lines) と対称な実装。
+// rows 省略時の挙動: lines を undefined にして resolveLines (cols + aspect → lines) 経路に
+// 載せる。 横書きの lines 省略時挙動と完全対称。
+//
+// aspect の swap: aspect は user 視点の物理 W:H 比 ('3/2' = 物理 W:H = 3:2)。 vertical-rl では
+// 物理 W = logical block, 物理 H = logical inline。 横書きと共通の logical 計算 (resolveLines:
+// cellHeight = cellWidth * h/w) を使うため、 user の aspect 'W/H' を内部 'H/W' に swap して
+// logical block/inline 比に変換する。 image natural aspect の imgIntrinsic も同様に swap する。
 function normalizeVerticalWhenColumns(
   whenColumns: Partial<Record<number, VerticalWhenColumnsVariant>>,
 ): Record<number, WhenColumnsVariant> {
@@ -399,17 +409,23 @@ function normalizeVerticalWhenColumns(
     const n = Number.parseInt(key, 10);
     const v = whenColumns[n];
     if (!v) continue;
-    const charsOmitted = v.chars === undefined;
     out[n] = {
       page: v.page,
       at: { col: v.at.char, line: v.at.row },
-      cols: charsOmitted ? 1 : (v.chars as number),
+      cols: v.chars,
       lines: v.rows,
-      aspect: v.aspect,
-      _colsFromAspect: charsOmitted,
+      aspect: v.aspect !== undefined ? swapAspect(v.aspect) : undefined,
     };
   }
   return out;
+}
+
+// 'W/H' を 'H/W' に swap する。 parseAspect で失敗するフォーマットはそのまま (warn は呼び出し側)。
+// vertical-rl 用に user-facing aspect (物理 W:H) を内部 logical 比 (block/inline = H:W) に変換する。
+function swapAspect(aspect: string): string {
+  const parsed = parseAspect(aspect);
+  if (!parsed) return aspect;
+  return `${parsed.h}/${parsed.w}`;
 }
 
 // 横書き public variant 群を内部形式に正規化する (field 名一致のため shallow copy)。
@@ -594,38 +610,6 @@ function resolveLines(variant: WhenColumnsVariant, ctx: ResolveLinesContext): nu
   return FALLBACK_LINES;
 }
 
-// variant.lines + aspect (または画像 natural aspect) から cols (= grid-column span) を逆算する。
-// resolveLines (cols + aspect → lines) と対称。 縦書きで chars 省略時に attach 経路から呼ばれる。
-// 戻り値は常に >= 1 の整数。
-function resolveColsFromLines(variant: WhenColumnsVariant, ctx: ResolveLinesContext): number {
-  const lines = variant.lines !== undefined && variant.lines >= 1 ? Math.floor(variant.lines) : 1;
-  const cellHeight = lines * ctx.lineHeightPx;
-  // aspect 優先 (W/H)。 cell の logical block 軸 size から inline 軸 size を導出。
-  const aspectParsed = variant.aspect !== undefined ? parseAspect(variant.aspect) : undefined;
-  if (variant.aspect !== undefined && !aspectParsed) {
-    console.warn(
-      `[tilepage] WhenColumnsVariant: invalid aspect '${variant.aspect}'; expected 'W/H' (e.g. '3/4'). Falling back to natural aspect.`,
-    );
-  }
-  // 縦書きでは logical inline 軸 = vertical-rl の物理 Y 軸、 block 軸 = 物理 X 軸。
-  // aspect は user 視点の物理 W/H (1536x1024 = 3/2)。 logical で書き直すと block/inline = w/h。
-  // cellWidth (logical inline) = cellHeight (logical block) * h / w
-  const ratio = aspectParsed
-    ? aspectParsed.h / aspectParsed.w
-    : ctx.imgIntrinsic
-      ? ctx.imgIntrinsic.h / ctx.imgIntrinsic.w
-      : undefined;
-  if (ratio === undefined || ctx.columnWidthPx <= 0) {
-    return 1;
-  }
-  const cellInlineSize = cellHeight * ratio;
-  // N 段 + (N-1) gap = cellInlineSize  ⇒  N = (cellInlineSize + gutter) / (columnWidth + gutter)
-  const denom = ctx.columnWidthPx + ctx.gutterPx;
-  if (denom <= 0) return 1;
-  const cols = Math.max(1, Math.round((cellInlineSize + ctx.gutterPx) / denom));
-  return cols;
-}
-
 // 要素から ResolveLinesContext を組み立てる。 px の生成元は computed style のみで、
 // JS 内に物理長リテラルを書かない (評価軸 #4)。
 function buildResolveLinesContext(book: Book, page: Page): ResolveLinesContext {
@@ -658,7 +642,6 @@ function buildResolveLinesContext(book: Book, page: Page): ResolveLinesContext {
 export const _internalAspect = {
   parseAspect,
   resolveLines,
-  resolveColsFromLines,
   FALLBACK_LINES,
 };
 
@@ -686,23 +669,18 @@ function attachVariantObstacle(
   const el = obstacle.element;
   el.style.display = '';
   const baseCtx = buildResolveLinesContext(page.book, page);
-  const imgIntrinsic = getImgIntrinsic(el);
-  // 縦書きで chars 省略時は lines (= rows) を起点に aspect / natural aspect から cols を逆算する。
-  // この経路では resolveLines は通さない (lines は variant.lines をそのまま採用)。
+  // 画像 natural aspect (img.naturalWidth/Height) は user 視点の物理 W:H。 vertical-rl では
+  // logical block:inline = W:H に対応するため、 resolveLines が期待する「logical inline=w / block=h」
+  // 表現に合わせて w/h を swap する (cellHeight = cellWidth * h/w が縦書きでも正しく cellBlock を出す)。
+  const rawIntrinsic = getImgIntrinsic(el);
+  const imgIntrinsic =
+    rawIntrinsic && page.book.writingMode === 'vertical-rl'
+      ? { w: rawIntrinsic.h, h: rawIntrinsic.w }
+      : rawIntrinsic;
+  // 横書き / 縦書きとも cols (= grid-column span = 段の数) は variant の必須値 (横書き cols /
+  // 縦書き chars) からそのまま採用し、 lines は resolveLines (cols + aspect → lines) で導出する。
   // normalize 段階では columnWidthPx 等の実 px が分からないため attach 経路で解決する。
-  let effectiveVariant: WhenColumnsVariant = variant;
-  let resolvedLines: number;
-  if (variant._colsFromAspect) {
-    const derivedCols = resolveColsFromLines(variant, { ...baseCtx, imgIntrinsic });
-    effectiveVariant = { ...variant, cols: derivedCols };
-    resolvedLines =
-      variant.lines !== undefined && variant.lines >= 1 ? Math.floor(variant.lines) : 1;
-  } else {
-    resolvedLines = resolveLines(effectiveVariant, {
-      ...baseCtx,
-      imgIntrinsic,
-    });
-  }
+  const resolvedLines = resolveLines(variant, { ...baseCtx, imgIntrinsic });
   const projection = axisProjection(page.book.writingMode);
   // obstacle-layer の content area (padding を引いた領域) を基準に maxLines を出す。
   // padding は createBook の宣言値が CSS 変数経由で obstacle-layer に効いている。
@@ -717,7 +695,7 @@ function attachVariantObstacle(
     baseCtx.lineHeightPx > 0 && contentBlockSize > 0
       ? Math.max(1, Math.floor(contentBlockSize / baseCtx.lineHeightPx))
       : Number.POSITIVE_INFINITY;
-  const clamped = clampVariantPlacement(effectiveVariant, resolvedLines, n, maxLines);
+  const clamped = clampVariantPlacement(variant, resolvedLines, n, maxLines);
   el.style.gridColumn = `${clamped.col} / span ${clamped.cols}`;
   el.style.gridRow = `${clamped.line} / span ${clamped.lines}`;
   el.dataset.whenColumns = String(n);
