@@ -150,13 +150,6 @@ export function createBook(options: BookOptions = {}): Book {
   root.className = 'tilepage-book';
   const columnsConfig: ColumnsConfig = options.columns ?? 6;
   const writingMode: WritingMode = options.writingMode ?? 'horizontal-tb';
-  // vertical-rl + supportedColumns の組み合わせは line グリッドの軸 swap が
-  // 未整備のため本バージョンでは未対応。 createBook 時点で早期 throw する。
-  if (writingMode === 'vertical-rl' && isSupportedMode(columnsConfig)) {
-    throw new Error(
-      'tilepage: writingMode "vertical-rl" with supportedColumns is not supported yet',
-    );
-  }
   if (options.gutter) root.style.setProperty('--tilepage-gutter', options.gutter);
   if (options.padding) root.style.setProperty('--tilepage-padding', options.padding);
   root.dataset.writingMode = writingMode;

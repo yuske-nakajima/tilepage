@@ -57,8 +57,10 @@
 .tilepage-page[data-writing-mode="vertical-rl"] .tilepage-flow-layer,
 .tilepage-page[data-writing-mode="vertical-rl"] .tilepage-obstacle-layer {
   writing-mode: vertical-rl;
-  column-gap: 0;
-  row-gap: var(--tilepage-gutter, 1em);
+  column-gap: var(--tilepage-gutter);
+  row-gap: 0;
+  padding-block: var(--tilepage-padding-block, 1.5em);
+  padding-inline: var(--tilepage-padding-inline, 4em);
 }
 
 .tilepage-column {
