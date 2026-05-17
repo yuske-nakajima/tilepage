@@ -14,16 +14,20 @@ import merosText from '../meros.txt?raw';
 // 走れメロスの縦組み。 viewport の高さに応じて段数 N=2/4/6/8 が切り替わる。
 // 縦書きでは inline 軸 = viewport の高さ (vertical-rl の文字進行方向) なので
 // breakpoints の比較対象は window.innerHeight になる (`deriveColumnsFromSupported` 参照)。
-//   N=8: 90em / N=6: 65em / N=4: 45em / N=2: 0 (常に true)
-// 1em = 16px 基準で 高さ 1440px=N8 / 1040px=N6 / 720px=N4 / それ未満=N2。
+//   N=8: 60em / N=6: 50em / N=4: 45em / N=2: 0 (常に true)
+// 1em = 16px 基準で 高さ 960px=N8 / 800px=N6 / 720px=N4 / それ未満=N2。
+// 代表 viewport: 1920x1080(67.5em)=N8 / 1024x768(48em)=N4 / 375x667(41.6em)=N2。
 //
 // 縦書きの whenColumns variant では:
-//   at.row  = grid-row-start  (1-indexed, 段内の char 位置に相当)
-//   at.char = grid-col-start  (1-indexed, 段番号に相当)
-//   rows    = grid-row span   (block 軸 = vertical-rl の物理 width 方向の span。 1 単位 = lineHeight)
-//   chars   = grid-col span   (inline 軸 = vertical-rl の物理 height 方向の span。 1 単位 = 1 段)
-//            省略時は aspect (or 画像 natural aspect) と rows から逆算される
-// rows を大きくすれば画像の物理 X 軸 (= 縦書き本での画像 width) が大きくなる。
+//   at.row  = grid-row-start    (内部的に grid-row-start にマップ)
+//   at.char = grid-column-start (内部的に grid-column-start にマップ)
+//   rows    = grid-row span     (block 軸 = 物理 width 方向)
+//   chars   = grid-column span  (inline 軸 = 物理 height 方向 = 段の本数)
+// 1 cell の物理サイズ:
+//   width  = rows  × line-height
+//   height = chars × column-block-size + (chars-1) × gutter
+// 各 viewport で line-height ≒ 25.84px (1em=16px の 1.5 倍ベース)。
+// natural aspect 3:2 を狙うため rows / chars は各 N で実測ベースで明示する。
 
 const app = document.getElementById('app');
 if (!app) throw new Error('#app が見つかりません');
@@ -40,7 +44,7 @@ const book: Book = createBook({
   writingMode: 'vertical-rl',
   columns: {
     supported: [2, 4, 6, 8],
-    breakpoints: { 8: '90em', 6: '65em', 4: '45em', 2: '0' },
+    breakpoints: { 8: '60em', 6: '50em', 4: '45em', 2: '0' },
   },
   gutter: '1.5em',
   padding: '4em 1.5em',
@@ -50,42 +54,51 @@ function tagObstacle(obstacle: Obstacle, id: string): void {
   obstacle.element.setAttribute('data-id', id);
 }
 
-// 王 (king): 雑誌的な大判画像。 N 全数 (2/4/6/8) で variant を定義。
-// chars / aspect ともに省略 → 画像 natural aspect (1536x1024 = 3:2) から chars を導出。
-// rows が小さい N では画像も小さく出る (N=4 で rows=10 / N=8 で rows=20)。
+// king (王) — 雑誌的な大判画像。
+// 各 N で chars / rows を明示し、 box aspect が natural 3:2 ±5% に収まるよう調整する。
+// 配置は本文の中央寄りにして、 画像 4 辺すべてに本文 text line が回り込むようにする。
 tagObstacle(
   addObstacleVertical(book, {
     shape: 'rect',
     src: '/meros-1-king.png',
     shapeMargin: '0.8em',
     whenColumns: {
-      2: { page: 1, at: { row: 1, char: 1 }, rows: 22 },
-      4: { page: 1, at: { row: 1, char: 1 }, rows: 16 },
-      6: { page: 1, at: { row: 1, char: 1 }, rows: 18 },
-      8: { page: 1, at: { row: 1, char: 1 }, rows: 20 },
+      // N=2 mobile: col_w ≈ 257.5, line_h ≈ 25.84
+      //   chars=1 rows=15 → width≈388, height≈258, aspect≈1.50
+      2: { page: 1, at: { row: 8, char: 1 }, rows: 15, chars: 1 },
+      // N=4 tablet: col_w ≈ 142, line_h ≈ 25.84
+      //   chars=2 rows=18 → width≈465, height≈308, aspect≈1.51
+      4: { page: 1, at: { row: 6, char: 2 }, rows: 18, chars: 2 },
+      // N=6: 中間 viewport (800-960px height)
+      //   chars=2 rows=14 → aspect ≈ 1.4-1.5
+      6: { page: 1, at: { row: 4, char: 2 }, rows: 14, chars: 2 },
+      // N=8 desktop: col_w ≈ 98, line_h ≈ 25.84
+      //   chars=3 rows=20 → width≈517, height≈342, aspect≈1.51
+      8: { page: 1, at: { row: 6, char: 3 }, rows: 20, chars: 3 },
     },
   }),
   'king',
 );
 
-// 走るメロス (circle)。 全 N (2/4/6/8) で variant を宣言。
-// aspect '3/2' を明示し、 chars 省略経路で rows + aspect から chars を逆算させる。
+// run (走るメロス) — circle shape。
+// page=2 系に配置 (king と別 page で重ならないように)。
 tagObstacle(
   addObstacleVertical(book, {
     shape: 'circle',
     src: '/meros-2-run.png',
     shapeMargin: '0.8em',
     whenColumns: {
-      2: { page: 4, at: { row: 1, char: 1 }, rows: 12, aspect: '3/2' },
-      4: { page: 2, at: { row: 3, char: 1 }, rows: 10, aspect: '3/2' },
-      6: { page: 2, at: { row: 3, char: 2 }, rows: 12, aspect: '3/2' },
-      8: { page: 2, at: { row: 3, char: 3 }, rows: 14, aspect: '3/2' },
+      // N=2 mobile: page=2 中央寄り
+      2: { page: 2, at: { row: 8, char: 1 }, rows: 15, chars: 1 },
+      4: { page: 2, at: { row: 8, char: 2 }, rows: 18, chars: 2 },
+      6: { page: 2, at: { row: 6, char: 3 }, rows: 14, chars: 2 },
+      8: { page: 2, at: { row: 6, char: 4 }, rows: 20, chars: 3 },
     },
   }),
   'run',
 );
 
-// 再会 (polygon)。 page=2 以降。 chars を省略し aspect '3/2' から逆算させる。
+// reunion (再会) — polygon (菱形)。 page=3 系。
 tagObstacle(
   addObstacleVertical(book, {
     shape: {
@@ -100,18 +113,18 @@ tagObstacle(
     src: '/meros-3-reunion.png',
     shapeMargin: '0.8em',
     whenColumns: {
-      2: { page: 5, at: { row: 1, char: 1 }, rows: 12, aspect: '3/2' },
-      4: { page: 4, at: { row: 1, char: 2 }, rows: 10, aspect: '3/2' },
-      6: { page: 3, at: { row: 1, char: 4 }, rows: 12, aspect: '3/2' },
-      8: { page: 3, at: { row: 1, char: 5 }, rows: 14, aspect: '3/2' },
+      // N=2 mobile: page=3
+      2: { page: 3, at: { row: 8, char: 1 }, rows: 15, chars: 1 },
+      4: { page: 3, at: { row: 6, char: 2 }, rows: 18, chars: 2 },
+      6: { page: 3, at: { row: 4, char: 3 }, rows: 14, chars: 2 },
+      8: { page: 3, at: { row: 4, char: 4 }, rows: 20, chars: 3 },
     },
   }),
   'reunion',
 );
 
-// page=2 以降の variant がアタッチできるよう少なくとも 2 page 確保。
-// 本文が長ければ distribute 側で page が増える。
-if (book.pages.length < 1) addPage(book);
-if (book.pages.length < 2) addPage(book);
+// king/run/reunion を別 page に置くため少なくとも 3 page を先に確保しておく。
+// distribute 側で本文があふれた分は自動で page が増える。
+while (book.pages.length < 3) addPage(book);
 
 addFlow(book, { text: SOURCE_TEXT });
