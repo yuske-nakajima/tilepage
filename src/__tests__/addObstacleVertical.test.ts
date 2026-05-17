@@ -49,11 +49,13 @@ describe('addObstacleVertical', () => {
       },
     });
 
-    // 内部マッピング: at.row → at.col → grid-column-start, rows → cols → grid-column span。
-    // at.char → at.line → grid-row-start, chars → lines → grid-row span。
-    // よって gridColumn = '2 / span 2', gridRow = '1 / span 3'。
-    expect(obstacle.element.style.gridColumn).toBe('2 / span 2');
-    expect(obstacle.element.style.gridRow).toBe('1 / span 3');
+    // v2 md 3-3 のマッピング:
+    //   at.row=2  → grid-row-start=2
+    //   at.char=1 → grid-column-start=1
+    //   rows=2    → grid-row span=2
+    //   chars=3   → grid-column span=3
+    expect(obstacle.element.style.gridColumn).toBe('1 / span 3');
+    expect(obstacle.element.style.gridRow).toBe('2 / span 2');
   });
 
   it('whenColumns 未指定で throw する', () => {

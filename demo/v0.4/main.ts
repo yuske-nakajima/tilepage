@@ -1,5 +1,7 @@
 import {
   addFlow,
+  addObstacleHorizontal,
+  addObstacleVertical,
   addPage,
   type Book,
   type ColumnsConfig,
@@ -44,7 +46,7 @@ const DEFAULT_TEXT =
 // 中央付近に「全幅の半分以下」のサイズで obstacle を配置する (全 column を覆わない)。
 // 1 列以上は流せる位置を残すため、 obstacle が占有する列数は columns-1 を超えないようにする。
 // 戻り値は段組み相対の start 段と span (= grid-column-start / grid-column span に流す)。
-function _computeObstaclePlacement(columns: number): { start: number; span: number } {
+function computeObstaclePlacement(columns: number): { start: number; span: number } {
   if (columns <= 1) return { start: 1, span: 1 };
   const span = Math.max(1, Math.min(columns - 1, Math.ceil(columns / 3)));
   const start = Math.max(1, Math.floor((columns - span) / 2) + 1);

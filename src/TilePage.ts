@@ -375,15 +375,16 @@ export function addObstacleVertical(book: Book, options: VerticalObstacleOptions
 }
 
 // 縦書き public variant 群を内部 WhenColumnsVariant 形式に正規化する。
-// API 層の axis swap 吸収はここで行う:
-//   at.row  → at.line       (段組み相対 = grid-row-start)
-//   at.char → at.col        (文字位置  = grid-column-start)
-//   rows    → cols          (= grid-row span)   ※ 「段組み相対の高さ」
-//   chars   → lines         (= grid-column span)※ 「幅」 (省略時 aspect/natural から導出)
-// 注意: 内部 WhenColumnsVariant の cols/lines は CSS span に直結する物理座標であり、
-// 縦書きの「段組み相対の高さ」を rows、「幅」を chars に対応させる。
-// 縦書きの reflow / clamp 計算は内部 cols/lines を grid 物理軸として扱うので、
-// "縦書きの cols" は内部 cols = grid-column span (= 文字幅方向) になることに注意。
+// v2 md 3-3 の表通りにマップする:
+//   at.row  → grid-row-start    → 内部 at.line
+//   at.char → grid-column-start → 内部 at.col
+//   rows    → grid-row span     → 内部 lines
+//   chars   → grid-column span  → 内部 cols
+// 内部 WhenColumnsVariant の cols/lines は CSS span に直結する物理座標で、
+//   cols  = grid-column span
+//   lines = grid-row span
+// chars が省略された場合は aspect / natural aspect から導出する想定だが、
+// 現状の resolveLines は cols 必須前提のため、 暫定 fallback として rows と同値を入れる。
 function normalizeVerticalWhenColumns(
   whenColumns: Partial<Record<number, VerticalWhenColumnsVariant>>,
 ): Record<number, WhenColumnsVariant> {
@@ -392,18 +393,11 @@ function normalizeVerticalWhenColumns(
     const n = Number.parseInt(key, 10);
     const v = whenColumns[n];
     if (!v) continue;
-    // 縦書き: rows が段組み相対の「block 軸 (横方向 right→left)」 span。
-    //         chars が「inline 軸 (縦方向 top→bottom)」 span。
-    // 内部 WhenColumnsVariant は cols=grid-column span, lines=grid-row span を意味する。
-    // 物理 grid-row = 縦方向 = inline 軸 (chars) → lines = chars
-    // 物理 grid-column = 横方向 = block 軸 (rows) → cols = rows
-    // つまり 内部 cols ← v.rows, 内部 lines ← v.chars。 at.col ← v.at.row, at.line ← v.at.char。
-    // (v.at.row は段組み相対 row 番号 = 物理 grid-column-start に流れる)
     out[n] = {
       page: v.page,
-      at: { col: v.at.row, line: v.at.char },
-      cols: v.rows,
-      lines: v.chars,
+      at: { col: v.at.char, line: v.at.row },
+      cols: v.chars ?? v.rows,
+      lines: v.rows,
       aspect: v.aspect,
     };
   }
