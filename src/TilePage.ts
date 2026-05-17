@@ -89,6 +89,9 @@ export interface WhenColumnsVariant {
   lines?: number;
   // 'W/H' (例: '3/4', '16/9')。 W, H は正の数値文字列。 パース失敗は warn して未指定扱い。
   aspect?: string;
+  // 内部 marker。 縦書き normalize で chars 省略時に true。 attach 時に lines + aspect から
+  // cols を逆算する経路を駆動する。 公開 API には現れない。
+  _colsFromAspect?: boolean;
 }
 
 // 公開 API: 横書き variant。 cols=段組み相対の幅 (grid-column span)。
@@ -380,11 +383,14 @@ export function addObstacleVertical(book: Book, options: VerticalObstacleOptions
 //   at.char → grid-column-start → 内部 at.col
 //   rows    → grid-row span     → 内部 lines
 //   chars   → grid-column span  → 内部 cols
-// 内部 WhenColumnsVariant の cols/lines は CSS span に直結する物理座標で、
-//   cols  = grid-column span
-//   lines = grid-row span
-// chars が省略された場合は aspect / natural aspect から導出する想定だが、
-// 現状の resolveLines は cols 必須前提のため、 暫定 fallback として rows と同値を入れる。
+// 内部 WhenColumnsVariant の cols/lines は CSS span に直結する logical 軸 span で、
+//   cols  = grid-column span (= inline 軸 span)
+//   lines = grid-row span    (= block  軸 span)
+// CSS Grid は writing-mode に従い軸 swap されるため、 横書き / 縦書き共通の logical 軸で扱える。
+//
+// chars 省略時の挙動: cols には placeholder (1) を入れ、 _colsFromAspect マーカーを立てる。
+// attach 時に resolveColsFromLines で aspect / natural aspect から cols を逆算する。
+// 横書きでの aspect 自動導出 (resolveLines: cols + aspect → lines) と対称な実装。
 function normalizeVerticalWhenColumns(
   whenColumns: Partial<Record<number, VerticalWhenColumnsVariant>>,
 ): Record<number, WhenColumnsVariant> {
@@ -393,12 +399,14 @@ function normalizeVerticalWhenColumns(
     const n = Number.parseInt(key, 10);
     const v = whenColumns[n];
     if (!v) continue;
+    const charsOmitted = v.chars === undefined;
     out[n] = {
       page: v.page,
       at: { col: v.at.char, line: v.at.row },
-      cols: v.chars ?? v.rows,
+      cols: charsOmitted ? 1 : (v.chars as number),
       lines: v.rows,
       aspect: v.aspect,
+      _colsFromAspect: charsOmitted,
     };
   }
   return out;
@@ -586,6 +594,38 @@ function resolveLines(variant: WhenColumnsVariant, ctx: ResolveLinesContext): nu
   return FALLBACK_LINES;
 }
 
+// variant.lines + aspect (または画像 natural aspect) から cols (= grid-column span) を逆算する。
+// resolveLines (cols + aspect → lines) と対称。 縦書きで chars 省略時に attach 経路から呼ばれる。
+// 戻り値は常に >= 1 の整数。
+function resolveColsFromLines(variant: WhenColumnsVariant, ctx: ResolveLinesContext): number {
+  const lines = variant.lines !== undefined && variant.lines >= 1 ? Math.floor(variant.lines) : 1;
+  const cellHeight = lines * ctx.lineHeightPx;
+  // aspect 優先 (W/H)。 cell の logical block 軸 size から inline 軸 size を導出。
+  const aspectParsed = variant.aspect !== undefined ? parseAspect(variant.aspect) : undefined;
+  if (variant.aspect !== undefined && !aspectParsed) {
+    console.warn(
+      `[tilepage] WhenColumnsVariant: invalid aspect '${variant.aspect}'; expected 'W/H' (e.g. '3/4'). Falling back to natural aspect.`,
+    );
+  }
+  // 縦書きでは logical inline 軸 = vertical-rl の物理 Y 軸、 block 軸 = 物理 X 軸。
+  // aspect は user 視点の物理 W/H (1536x1024 = 3/2)。 logical で書き直すと block/inline = w/h。
+  // cellWidth (logical inline) = cellHeight (logical block) * h / w
+  const ratio = aspectParsed
+    ? aspectParsed.h / aspectParsed.w
+    : ctx.imgIntrinsic
+      ? ctx.imgIntrinsic.h / ctx.imgIntrinsic.w
+      : undefined;
+  if (ratio === undefined || ctx.columnWidthPx <= 0) {
+    return 1;
+  }
+  const cellInlineSize = cellHeight * ratio;
+  // N 段 + (N-1) gap = cellInlineSize  ⇒  N = (cellInlineSize + gutter) / (columnWidth + gutter)
+  const denom = ctx.columnWidthPx + ctx.gutterPx;
+  if (denom <= 0) return 1;
+  const cols = Math.max(1, Math.round((cellInlineSize + ctx.gutterPx) / denom));
+  return cols;
+}
+
 // 要素から ResolveLinesContext を組み立てる。 px の生成元は computed style のみで、
 // JS 内に物理長リテラルを書かない (評価軸 #4)。
 function buildResolveLinesContext(book: Book, page: Page): ResolveLinesContext {
@@ -618,6 +658,7 @@ function buildResolveLinesContext(book: Book, page: Page): ResolveLinesContext {
 export const _internalAspect = {
   parseAspect,
   resolveLines,
+  resolveColsFromLines,
   FALLBACK_LINES,
 };
 
@@ -645,10 +686,23 @@ function attachVariantObstacle(
   const el = obstacle.element;
   el.style.display = '';
   const baseCtx = buildResolveLinesContext(page.book, page);
-  const resolvedLines = resolveLines(variant, {
-    ...baseCtx,
-    imgIntrinsic: getImgIntrinsic(el),
-  });
+  const imgIntrinsic = getImgIntrinsic(el);
+  // 縦書きで chars 省略時は lines (= rows) を起点に aspect / natural aspect から cols を逆算する。
+  // この経路では resolveLines は通さない (lines は variant.lines をそのまま採用)。
+  // normalize 段階では columnWidthPx 等の実 px が分からないため attach 経路で解決する。
+  let effectiveVariant: WhenColumnsVariant = variant;
+  let resolvedLines: number;
+  if (variant._colsFromAspect) {
+    const derivedCols = resolveColsFromLines(variant, { ...baseCtx, imgIntrinsic });
+    effectiveVariant = { ...variant, cols: derivedCols };
+    resolvedLines =
+      variant.lines !== undefined && variant.lines >= 1 ? Math.floor(variant.lines) : 1;
+  } else {
+    resolvedLines = resolveLines(effectiveVariant, {
+      ...baseCtx,
+      imgIntrinsic,
+    });
+  }
   const projection = axisProjection(page.book.writingMode);
   // obstacle-layer の content area (padding を引いた領域) を基準に maxLines を出す。
   // padding は createBook の宣言値が CSS 変数経由で obstacle-layer に効いている。
@@ -663,7 +717,7 @@ function attachVariantObstacle(
     baseCtx.lineHeightPx > 0 && contentBlockSize > 0
       ? Math.max(1, Math.floor(contentBlockSize / baseCtx.lineHeightPx))
       : Number.POSITIVE_INFINITY;
-  const clamped = clampVariantPlacement(variant, resolvedLines, n, maxLines);
+  const clamped = clampVariantPlacement(effectiveVariant, resolvedLines, n, maxLines);
   el.style.gridColumn = `${clamped.col} / span ${clamped.cols}`;
   el.style.gridRow = `${clamped.line} / span ${clamped.lines}`;
   el.dataset.whenColumns = String(n);
