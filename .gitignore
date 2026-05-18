@@ -11,10 +11,10 @@ demo-dist/
 test-results/
 playwright-report/
 
-# ローカル検証用の inspect / evaluator スクリプトとスクショ (commit 対象外)
-e2e/_inspect-*.spec.ts
+# ローカル検証用ファイル (commit 対象外)
+e2e/_*.spec.ts
 e2e/inspect-*.spec.ts
 e2e/sprint*-evaluator*.spec.ts
-e2e/_scratch-*.spec.ts
 e2e/_inspect-screenshots/
-_check-vm.mjs
+_check-*.mjs
+.sprint*-*.mjs
