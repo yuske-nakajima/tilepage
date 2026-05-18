@@ -58,8 +58,12 @@ tagObstacle(
     src: '/meros-1-king.png',
     shapeMargin: '0.8em',
     whenColumns: {
-      // N=2 mobile: 両段 (chars=2) 占有。 横書き king の cols=2 と完全対称。
-      2: { page: 1, at: { row: 1, char: 1 }, chars: 2, aspect: '3/2' },
+      // N=2 mobile: chars=2 (2 段占有) は adjustVerticalVariantForFit で chars=1 に
+      // auto-decrement されるが、 char=1 / row=1 だと「読み始め段 = column 1」 を
+      // image が占有して冒頭 1 文字「メ」 しか入らない。 横書きの cols=2, line=100 と
+      // 対称的に「読み終わり側 = column 2 (= bottom 段)」 へ image を寄せるため
+      // char=2 を指定する (chars=1 + char=2 → column 2 = bottom 段に image)。
+      2: { page: 1, at: { row: 1, char: 2 }, chars: 1, aspect: '3/2' },
       // N=4 tablet: 中央 2 段に画像。
       4: { page: 1, at: { row: 1, char: 2 }, chars: 2, aspect: '3/2' },
       // N=6: 中央 3 段。
@@ -79,7 +83,8 @@ tagObstacle(
     src: '/meros-2-run.png',
     shapeMargin: '0.8em',
     whenColumns: {
-      2: { page: 2, at: { row: 4, char: 1 }, chars: 1, aspect: '3/2' },
+      // N=2 mobile: run image も column 2 (= bottom 段) に置き、 column 1 を本文用に確保。
+      2: { page: 2, at: { row: 4, char: 2 }, chars: 1, aspect: '3/2' },
       4: { page: 2, at: { row: 3, char: 3 }, chars: 2, aspect: '3/2' },
       6: { page: 2, at: { row: 5, char: 4 }, chars: 3, aspect: '3/2' },
       8: { page: 2, at: { row: 5, char: 5 }, chars: 4, aspect: '3/2' },
@@ -103,6 +108,7 @@ tagObstacle(
     src: '/meros-3-reunion.png',
     shapeMargin: '0.8em',
     whenColumns: {
+      // N=2 mobile: reunion image は元から char=2 (column 2 = bottom 段) で正しい。
       2: { page: 3, at: { row: 1, char: 2 }, chars: 1, aspect: '3/2' },
       4: { page: 3, at: { row: 2, char: 2 }, chars: 2, aspect: '3/2' },
       6: { page: 3, at: { row: 14, char: 3 }, chars: 3, aspect: '3/2' },

@@ -375,6 +375,140 @@ for (const c of CASES) {
       expect(result.violations, JSON.stringify(result.violations)).toEqual([]);
     });
 
+    test('観点 6: 各 column の冒頭 5 文字が visible obstacle の bbox 範囲内に物理的に侵食しない', async ({
+      page,
+    }) => {
+      // 観点 3 (point-in-clip 侵食) は clip-path 内部の text rect 検出に特化し、
+      // image 「bbox の物理範囲内」 への 1 文字程度の column 冒頭文字侵食は検出できない。
+      // ユーザー実機目視 (mobile N=2 で「メ」 1 文字が見えない) で再発する観点を補強する。
+      //
+      // 判定: 各 page の各 column 内、 column-block 軸 (vertical-rl: X 軸 / horizontal-tb: Y 軸)
+      // の column block-start 側に位置する text rect 上位 5 個を取得し、 それぞれが visible
+      // obstacle の bounding box (clip ではなく rect) の **物理範囲内** に侵食していないことを
+      // assert する。 column の読み始め (= block-start) 文字が画像に隠れていないことを保証する。
+      const result = await page.evaluate(() => {
+        const obstacles = Array.from(
+          document.querySelectorAll('.tilepage-obstacle[data-id]'),
+        ) as HTMLElement[];
+        const visibleObstacles = obstacles.filter((el) => el.offsetParent !== null);
+        // 各 obstacle の bbox + clip-path 内側判定関数。 観点 3 と同質の point-in-clip を採用し、
+        // shape-outside で本来 text が回り込む clip 外 (bbox 内) のケースは hit としない。
+        const obstacleInfos = visibleObstacles.map((el) => {
+          const r = el.getBoundingClientRect();
+          const cp = window.getComputedStyle(el).clipPath;
+          const insideClip = (px: number, py: number): boolean => {
+            const lx = (px - r.left) / r.width;
+            const ly = (py - r.top) / r.height;
+            if (lx < 0 || lx > 1 || ly < 0 || ly > 1) return false;
+            if (cp === 'none' || cp === '' || cp.startsWith('inset(')) return true;
+            if (cp.startsWith('circle(')) {
+              const dx = lx - 0.5;
+              const dy = ly - 0.5;
+              return dx * dx + dy * dy <= 0.25;
+            }
+            const m = cp.match(/polygon\(([^)]+)\)/);
+            if (!m) return true;
+            const pts: Array<[number, number]> = m[1]
+              .split(',')
+              .map((s) => s.trim().split(/\s+/))
+              .map(([sx, sy]) => [Number.parseFloat(sx) / 100, Number.parseFloat(sy) / 100]);
+            let inside = false;
+            for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+              const [xi, yi] = pts[i];
+              const [xj, yj] = pts[j];
+              const intersect =
+                yi > ly !== yj > ly && lx < ((xj - xi) * (ly - yi)) / (yj - yi) + xi;
+              if (intersect) inside = !inside;
+            }
+            return inside;
+          };
+          return {
+            id: el.dataset.id,
+            left: r.left,
+            top: r.top,
+            right: r.right,
+            bottom: r.bottom,
+            insideClip,
+          };
+        });
+        const isVertical =
+          document.querySelector('.tilepage-page[data-writing-mode="vertical-rl"]') !== null;
+        const columns = Array.from(document.querySelectorAll('.tilepage-column')) as HTMLElement[];
+        const visibleColumns = columns.filter((el) => el.offsetParent !== null);
+        const hits: Array<{
+          column: number;
+          ch: string;
+          left: number;
+          top: number;
+          obstacle: string | undefined;
+        }> = [];
+        visibleColumns.forEach((col, colIdx) => {
+          // column 内の全 text rect を 1 文字単位で集める
+          const walker = document.createTreeWalker(col, NodeFilter.SHOW_TEXT);
+          const charRects: {
+            ch: string;
+            left: number;
+            top: number;
+            right: number;
+            bottom: number;
+          }[] = [];
+          let n: Node | null = walker.nextNode();
+          while (n) {
+            const tn = n as Text;
+            const txt = tn.textContent ?? '';
+            for (let i = 0; i < txt.length; i++) {
+              const range = document.createRange();
+              try {
+                range.setStart(tn, i);
+                range.setEnd(tn, i + 1);
+                const rs = range.getClientRects();
+                for (const r of rs) {
+                  if (r.width > 0 && r.height > 0) {
+                    charRects.push({
+                      ch: txt[i],
+                      left: r.left,
+                      top: r.top,
+                      right: r.right,
+                      bottom: r.bottom,
+                    });
+                  }
+                }
+              } catch {
+                // ignore
+              }
+            }
+            n = walker.nextNode();
+          }
+          if (charRects.length === 0) return;
+          // column block-start (= 読み始め) 側で先頭 5 文字を取る。
+          // vertical-rl: block 軸 = X 右→左 → block-start = 右端 = right が最大
+          // horizontal-tb: block 軸 = Y 上→下 → block-start = 上端 = top が最小
+          const sorted = isVertical
+            ? [...charRects].sort((a, b) => b.right - a.right)
+            : [...charRects].sort((a, b) => a.top - b.top);
+          const heads = sorted.slice(0, 5);
+          for (const c of heads) {
+            for (const ob of obstacleInfos) {
+              const insideX = c.right > ob.left && c.left < ob.right;
+              const insideY = c.bottom > ob.top && c.top < ob.bottom;
+              if (!insideX || !insideY) continue;
+              // bbox 内かつ clip 内の場合のみ「画像に隠れている」 とみなす。
+              // 文字 rect の中心点で clip 判定する。
+              const cx = (c.left + c.right) / 2;
+              const cy = (c.top + c.bottom) / 2;
+              if (!ob.insideClip(cx, cy)) continue;
+              hits.push({ column: colIdx, ch: c.ch, left: c.left, top: c.top, obstacle: ob.id });
+              break;
+            }
+          }
+        });
+        return { obstacleCount: visibleObstacles.length, columnCount: visibleColumns.length, hits };
+      });
+      expect(result.obstacleCount).toBeGreaterThan(0);
+      expect(result.columnCount).toBeGreaterThan(0);
+      expect(result.hits, JSON.stringify(result.hits)).toEqual([]);
+    });
+
     test('scroll-snap: book root の scroll-snap-type が y mandatory', async ({ page }) => {
       const snapType = await page
         .locator('.tilepage-book')
