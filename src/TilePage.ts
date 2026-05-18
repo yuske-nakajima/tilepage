@@ -677,10 +677,6 @@ function attachVariantObstacle(
     rawIntrinsic && page.book.writingMode === 'vertical-rl'
       ? { w: rawIntrinsic.h, h: rawIntrinsic.w }
       : rawIntrinsic;
-  // 横書き / 縦書きとも cols (= grid-column span = 段の数) は variant の必須値 (横書き cols /
-  // 縦書き chars) からそのまま採用し、 lines は resolveLines (cols + aspect → lines) で導出する。
-  // normalize 段階では columnWidthPx 等の実 px が分からないため attach 経路で解決する。
-  const resolvedLines = resolveLines(variant, { ...baseCtx, imgIntrinsic });
   const projection = axisProjection(page.book.writingMode);
   // obstacle-layer の content area (padding を引いた領域) を基準に maxLines を出す。
   // padding は createBook の宣言値が CSS 変数経由で obstacle-layer に効いている。
@@ -695,7 +691,18 @@ function attachVariantObstacle(
     baseCtx.lineHeightPx > 0 && contentBlockSize > 0
       ? Math.max(1, Math.floor(contentBlockSize / baseCtx.lineHeightPx))
       : Number.POSITIVE_INFINITY;
-  const clamped = clampVariantPlacement(variant, resolvedLines, n, maxLines);
+  // 縦書き専用: aspect 矛盾 (期待 cellBlock > contentBlockSize) を検出した場合、
+  // cols (= 段の数 = user-facing chars) を 1 段ずつデクリメントして整合する最大サイズを採用する。
+  // 横書き経路は touched しない (元の variant をそのまま使う)。
+  const effectiveVariant =
+    page.book.writingMode === 'vertical-rl'
+      ? adjustVerticalVariantForFit(variant, { ...baseCtx, imgIntrinsic }, maxLines, el)
+      : variant;
+  // 横書き / 縦書きとも cols (= grid-column span = 段の数) は variant の必須値 (横書き cols /
+  // 縦書き chars) からそのまま採用し、 lines は resolveLines (cols + aspect → lines) で導出する。
+  // normalize 段階では columnWidthPx 等の実 px が分からないため attach 経路で解決する。
+  const resolvedLines = resolveLines(effectiveVariant, { ...baseCtx, imgIntrinsic });
+  const clamped = clampVariantPlacement(effectiveVariant, resolvedLines, n, maxLines);
   el.style.gridColumn = `${clamped.col} / span ${clamped.cols}`;
   el.style.gridRow = `${clamped.line} / span ${clamped.lines}`;
   el.dataset.whenColumns = String(n);
@@ -737,6 +744,64 @@ function attachVariantObstacle(
   obstacle.colRange = [clamped.col, clamped.col + clamped.cols];
   obstacle.rowRange = [clamped.line, clamped.line + clamped.lines];
   obstacle.currentPage = page;
+}
+
+// 縦書き専用: aspect 矛盾を検出して cols (= user-facing chars) を 1 段ずつデクリメントする。
+// 検出条件: 期待 cellBlock (= resolveLines × lineHeightPx) > 利用可能 contentBlockSize。
+// 横書きでは band の物理 X 幅 (= 段幅) と物理 Y 高 (= page 高) のアスペクト比が縦書きと逆で、
+// 一般に cols=1 にしても aspect overflow が起きにくいため、 適用しない (task 仕様)。
+//
+// 最大反復: 10 回 (= 2*8 N 以下に収まる安全装置)。
+// デクリメント不能 (cols=1) で未整合なら、 user 指定の最小可能サイズ (cols=1) を採用 + warn。
+// 結果は element.dataset.rowsAdjusted / clampReasons に記録 (debug 可能性)。
+const MAX_VERTICAL_DECREMENT_ITERATIONS = 10;
+function adjustVerticalVariantForFit(
+  variant: WhenColumnsVariant,
+  ctx: ResolveLinesContext,
+  maxLines: number,
+  el: HTMLElement,
+): WhenColumnsVariant {
+  // 前回 attach 時に立てた dataset reason を必ずリセットする (N 変化で integration 復活する場合)。
+  if (el.dataset.aspectUnachievable) delete el.dataset.aspectUnachievable;
+  if (el.dataset.rowsAdjusted) delete el.dataset.rowsAdjusted;
+  if (!Number.isFinite(maxLines) || maxLines <= 0) return variant;
+  if (ctx.lineHeightPx <= 0) return variant;
+  // aspect 由来の cellBlock 期待値が contentBlockSize を超えていなければ何もしない。
+  const initialLines = resolveLines(variant, ctx);
+  if (initialLines <= maxLines) return variant;
+  // cols を 1 段ずつデクリメントして fit するか試す。
+  let cols = variant.cols;
+  let iter = 0;
+  while (cols > 1 && iter < MAX_VERTICAL_DECREMENT_ITERATIONS) {
+    cols -= 1;
+    iter += 1;
+    const probe: WhenColumnsVariant = { ...variant, cols };
+    const probeLines = resolveLines(probe, ctx);
+    if (probeLines <= maxLines) {
+      // 整合する最大サイズを発見。
+      el.dataset.rowsAdjusted = String(variant.cols - cols);
+      console.warn('[tilepage] vertical variant cols decremented for aspect fit', {
+        obstacleId: el.dataset.id ?? el.id ?? '(unnamed)',
+        original: { cols: variant.cols, aspect: variant.aspect },
+        adjusted: { cols, lines: probeLines },
+        iterations: iter,
+      });
+      return probe;
+    }
+  }
+  // cols=1 まで下げても整合しない → user 指定の最小可能サイズ (cols=1) を採用。
+  // bbox を aspect に合わせて縮めると cell との gap が生じ text wrap 観点で fail するため、
+  // ここでは bbox = cell のままにする (= aspect 観点は本質的に未達)。 dataset に reason を残し、
+  // 上位レイヤー (test / VLM) で「構造的制約」 として識別できるようにする。
+  el.dataset.rowsAdjusted = String(variant.cols - cols);
+  el.dataset.aspectUnachievable = 'true';
+  console.warn('[tilepage] vertical variant aspect unachievable; using cols=1 (bbox = cell)', {
+    obstacleId: el.dataset.id ?? el.id ?? '(unnamed)',
+    original: { cols: variant.cols, aspect: variant.aspect },
+    adjusted: { cols, requiredLines: resolveLines({ ...variant, cols }, ctx), maxLines },
+    note: 'cell aspect cannot match user aspect; bbox aspect will diverge',
+  });
+  return { ...variant, cols };
 }
 
 // at.col / at.line / cols / lines を [1, max] に clamp する。
