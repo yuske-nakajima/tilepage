@@ -192,9 +192,16 @@ for (const c of CASES) {
       expect(result.overlapCount, JSON.stringify(result.sample)).toBe(0);
     });
 
-    test(`観点 5: 各 obstacle の 4 辺それぞれから text line が ${WRAP_GAP_PX}px 以内 (page 端に接する辺は除外)`, async ({
+    test(`観点 5: 各 obstacle の 4 辺それぞれから text line が ${WRAP_GAP_PX}px 以内 (page 端に接する辺は除外、 cell-img gap 内は許容)`, async ({
       page,
     }) => {
+      // Sprint 6 #2 spec 拡大: 縦書きで cell 物理 aspect と user 指定 aspect が乖離するケース
+      // (mobile vertical N=2 等) では、 algorithm が bbox を cell より小さく縮める。 縮めた gap は
+      // shape-outside 範囲外なので text が gap 内に回り込む。 観点 5 はこの gap 分の距離も「許容」
+      // するため、 obstacle が data-cell-img-gap-inline / -block を持つ場合、 該当軸の許容閾値を
+      // gap 分だけ拡張する (= 旧 spec: bbox 周辺 maxGap → 新 spec: bbox + cell gap 周辺 maxGap)。
+      // vertical-rl + align/justify-self: start の構造上、 gap は inline-end (物理 bottom) /
+      // block-end (物理 left) 側のみに発生する (cell の start 側に寄せて配置されるため)。
       const result = await page.evaluate(
         ({ maxGap, pageEdgeThreshold }) => {
           const obstacles = Array.from(
@@ -269,17 +276,44 @@ for (const c of CASES) {
             dist: number;
           }[] = [];
 
+          // vertical-rl で cell-img gap が発生する側 (= 緩和対象側) を求める。
+          // bbox shrink は justify-self/align-self: start で cell の start 側に寄せるため、
+          //   inline axis (vertical-rl では Y) gap → 物理 bottom 側に発生
+          //   block  axis (vertical-rl では X) gap → 物理 left   側に発生
+          // 横書きでは shrink を行わない (algorithm 側で writingMode で gate)。
+          // 値は px 単位の文字列。 0 (gap なし) と 0 超の両方が data 属性に書き込まれる。
+          const isVertical =
+            document.querySelector('.tilepage-page[data-writing-mode="vertical-rl"]') !== null;
+          const cellGapFor = (
+            ob: HTMLElement,
+            side: 'top' | 'bottom' | 'left' | 'right',
+          ): number => {
+            if (!isVertical) return 0;
+            if (ob.dataset.bboxShrunk !== 'true') return 0;
+            const gI = Number.parseFloat(ob.dataset.cellImgGapInline ?? '0') || 0;
+            const gB = Number.parseFloat(ob.dataset.cellImgGapBlock ?? '0') || 0;
+            // vertical-rl, justify-self/align-self: start:
+            //   inline axis (Y top→bottom) start = top → gap at bottom (= gapInline)
+            //   block  axis (X right→left) start = right → gap at left (= gapBlock)
+            if (side === 'bottom') return gI;
+            if (side === 'left') return gB;
+            return 0;
+          };
+
           for (const ob of visibleObstacles) {
             const r = ob.getBoundingClientRect();
             const pageEl = closestPage(ob);
             const contentRect = contentRectOf(pageEl);
             // 辺が content area 境界より外側 / 接していたら page padding に来る辺なので評価対象外。
+            // cell-img gap がある側は cell 端 (= bbox 端 + gap) が page 端に接していれば対象外とみなす。
             const sideOnPageEdge = (side: 'top' | 'bottom' | 'left' | 'right'): boolean => {
               if (!contentRect) return false;
-              if (side === 'top') return r.top - contentRect.top <= pageEdgeThreshold;
-              if (side === 'bottom') return contentRect.bottom - r.bottom <= pageEdgeThreshold;
-              if (side === 'left') return r.left - contentRect.left <= pageEdgeThreshold;
-              return contentRect.right - r.right <= pageEdgeThreshold;
+              const gap = cellGapFor(ob, side);
+              if (side === 'top') return r.top - gap - contentRect.top <= pageEdgeThreshold;
+              if (side === 'bottom')
+                return contentRect.bottom - (r.bottom + gap) <= pageEdgeThreshold;
+              if (side === 'left') return r.left - gap - contentRect.left <= pageEdgeThreshold;
+              return contentRect.right - (r.right + gap) <= pageEdgeThreshold;
             };
             const collectDist = (side: 'top' | 'bottom' | 'left' | 'right'): number => {
               let bestDist = Number.POSITIVE_INFINITY;
@@ -315,7 +349,11 @@ for (const c of CASES) {
 
             for (const side of ['top', 'bottom', 'left', 'right'] as const) {
               if (sideOnPageEdge(side)) continue;
-              sideReport.push({ id: ob.dataset.id, side, dist: collectDist(side) });
+              const dist = collectDist(side);
+              // cell-img gap がある側はその分許容を引き伸ばす (gap 内に text が流入すれば 0 に近づく)。
+              const sideAllowance = cellGapFor(ob, side);
+              const adjusted = Math.max(0, dist - sideAllowance);
+              sideReport.push({ id: ob.dataset.id, side, dist: adjusted });
             }
           }
 

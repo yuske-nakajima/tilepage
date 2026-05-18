@@ -706,6 +706,10 @@ function attachVariantObstacle(
   el.style.gridColumn = `${clamped.col} / span ${clamped.cols}`;
   el.style.gridRow = `${clamped.line} / span ${clamped.lines}`;
   el.dataset.whenColumns = String(n);
+  // 縦書き専用: grid cell の物理 aspect (cellBlock / cellInline = 物理 W/H) が
+  // user 指定 aspect (variant.aspect or 画像 natural) と一致しない場合、 cell 内に
+  // aspect 合致する最大 sub-rect を取って bbox を縮める。 横書き経路は touch しない。
+  applyVerticalBboxAspectFit(el, page.book.writingMode, clamped, baseCtx, rawIntrinsic, variant);
   const allReasons = [...pageReasons, ...clamped.reasons];
   if (allReasons.length > 0) {
     el.dataset.clampReasons = allReasons.join(',');
@@ -802,6 +806,104 @@ function adjustVerticalVariantForFit(
     note: 'cell aspect cannot match user aspect; bbox aspect will diverge',
   });
   return { ...variant, cols };
+}
+
+// 縦書き専用: grid cell の物理 aspect (= block / inline = 物理 W/H) と user 指定 aspect
+// (variant.aspect or 画像 natural W:H) が乖離する場合、 cell 内に aspect 合致する最大
+// sub-rect を計算し element の inline-size / block-size に直接適用して bbox を縮める。
+// align-self / justify-self を 'start' に固定することで、 縮めた gap が cell の logical
+// end 側 (vertical-rl: 物理 left + 物理 bottom) に発生する。
+//
+// shape-outside polygon は reflowObstacles が getBoundingClientRect から再計算するため、
+// bbox 縮小が text の回り込み境界に正しく波及する (gap 内に text が流入する)。
+//
+// dataset:
+//   bboxShrunk          = 'true' (shrink 適用時)
+//   cellImgGapInline    = inline 軸 gap の px (vertical-rl: 物理 Y 方向 = 下辺寄り)
+//   cellImgGapBlock     = block 軸 gap の px (vertical-rl: 物理 X 方向 = 左辺寄り)
+//
+// 横書き経路は touch しない (cellBlock が contentBlockSize に収まる前提で aspect は cols /
+// lines の整数解で十分近似可能。 縦書き mobile N=2 のような物理 cell 制約が厳しい
+// ケースは横書きでは発生しない)。
+function applyVerticalBboxAspectFit(
+  el: HTMLElement,
+  writingMode: WritingMode,
+  clamped: { cols: number; lines: number },
+  ctx: ResolveLinesContext,
+  rawIntrinsic: { w: number; h: number } | undefined,
+  variant: WhenColumnsVariant,
+): void {
+  // 前回 attach 時の shrink 設定をクリア (N 変化で aspect 整合が回復する場合がある)。
+  const resetShrink = (): void => {
+    if (el.dataset.bboxShrunk) delete el.dataset.bboxShrunk;
+    if (el.dataset.cellImgGapInline) delete el.dataset.cellImgGapInline;
+    if (el.dataset.cellImgGapBlock) delete el.dataset.cellImgGapBlock;
+    el.style.inlineSize = '';
+    el.style.blockSize = '';
+    el.style.justifySelf = '';
+    el.style.alignSelf = '';
+  };
+  if (writingMode !== 'vertical-rl') {
+    resetShrink();
+    return;
+  }
+  if (clamped.cols <= 0 || clamped.lines <= 0 || ctx.lineHeightPx <= 0) {
+    resetShrink();
+    return;
+  }
+  // 物理 W:H 比の決定。 priority: variant.aspect → 画像 natural。
+  // 注意: vertical-rl の internal variant.aspect は normalizeVerticalWhenColumns で
+  // user-facing 'W/H' から logical 'H/W' (= block/inline) に swap 済み。 物理 W = block,
+  // 物理 H = inline なので、 physical W/H = parsed.w / parsed.h ではなく
+  // parsed.w / parsed.h を再度反転して parsed.h / parsed.w を取る (= 元の user W/H)。
+  // rawIntrinsic は getImgIntrinsic から physical (naturalWidth, naturalHeight) なので
+  // そのまま w / h で physical W/H になる (swap 不要)。
+  let targetWH: number | undefined;
+  if (variant.aspect) {
+    const p = parseAspect(variant.aspect);
+    if (p) targetWH = p.h / p.w;
+  }
+  if (targetWH === undefined && rawIntrinsic) {
+    targetWH = rawIntrinsic.w / rawIntrinsic.h;
+  }
+  if (targetWH === undefined || !Number.isFinite(targetWH) || targetWH <= 0) {
+    resetShrink();
+    return;
+  }
+  // cell 物理寸法: vertical-rl では block = X (= 物理 width), inline = Y (= 物理 height)。
+  const cellBlockPx = clamped.lines * ctx.lineHeightPx;
+  const cellInlinePx =
+    clamped.cols * ctx.columnWidthPx + Math.max(0, clamped.cols - 1) * ctx.gutterPx;
+  if (cellBlockPx <= 0 || cellInlinePx <= 0) {
+    resetShrink();
+    return;
+  }
+  const currentWH = cellBlockPx / cellInlinePx;
+  // 0.5% 以内なら shrink 不要 (test 許容は ±5% で十分余裕)。
+  const RELATIVE_EPS = 0.005;
+  if (Math.abs(currentWH - targetWH) / targetWH <= RELATIVE_EPS) {
+    resetShrink();
+    return;
+  }
+  // cell 内に target 比の最大 sub-rect を取る。 まず block 軸 full を試し、 inline がはみ出すなら inline full に切り替える。
+  let bboxBlockPx = cellBlockPx;
+  let bboxInlinePx = cellBlockPx / targetWH;
+  if (bboxInlinePx > cellInlinePx) {
+    bboxInlinePx = cellInlinePx;
+    bboxBlockPx = cellInlinePx * targetWH;
+  }
+  // どちらかが cell を超える数値誤差は clamp で吸収。
+  if (bboxBlockPx > cellBlockPx) bboxBlockPx = cellBlockPx;
+  if (bboxInlinePx > cellInlinePx) bboxInlinePx = cellInlinePx;
+  const gapInline = Math.max(0, cellInlinePx - bboxInlinePx);
+  const gapBlock = Math.max(0, cellBlockPx - bboxBlockPx);
+  el.style.inlineSize = `${bboxInlinePx.toFixed(4)}px`;
+  el.style.blockSize = `${bboxBlockPx.toFixed(4)}px`;
+  el.style.justifySelf = 'start';
+  el.style.alignSelf = 'start';
+  el.dataset.bboxShrunk = 'true';
+  el.dataset.cellImgGapInline = gapInline.toFixed(2);
+  el.dataset.cellImgGapBlock = gapBlock.toFixed(2);
 }
 
 // at.col / at.line / cols / lines を [1, max] に clamp する。
