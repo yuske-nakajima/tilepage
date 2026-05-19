@@ -16,7 +16,7 @@ test.describe('TilePage demo (走れメロス / supportedColumns + whenColumns @
   test.use({ viewport: { width: 1024, height: 800 } });
 
   test.beforeEach(async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/demo/');
     await page.waitForSelector('.tilepage-book');
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(500);

@@ -36,7 +36,7 @@ function buildUrl(params: {
     obstacle: params.obstacle,
     text: params.text,
   });
-  return `/v0.4/?${q.toString()}`;
+  return `/e2e/fixtures/v0.4/?${q.toString()}`;
 }
 
 // 各 step で V===S を満たすか測る。reflow を待つために flushNow を呼べないので debounce 後に少し待つ。

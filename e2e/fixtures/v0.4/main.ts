@@ -8,7 +8,7 @@ import {
   createBook,
   type ObstacleShape,
   type WritingMode,
-} from '../../src';
+} from '../../../src';
 
 type ObstacleKind = 'none' | 'rect' | 'circle' | 'polygon';
 

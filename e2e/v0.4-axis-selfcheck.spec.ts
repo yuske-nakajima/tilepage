@@ -25,7 +25,7 @@ function buildUrl(params: { columns: number; writingMode: WritingMode; text: str
     obstacle: 'none',
     text: params.text,
   });
-  return `/v0.4/?${q.toString()}`;
+  return `/e2e/fixtures/v0.4/?${q.toString()}`;
 }
 
 function buildWidthUrl(params: {
@@ -39,7 +39,7 @@ function buildWidthUrl(params: {
     obstacle: 'none',
     text: params.text,
   });
-  return `/v0.4/?${q.toString()}`;
+  return `/e2e/fixtures/v0.4/?${q.toString()}`;
 }
 
 test.describe('v0.4 評価軸 self-check (#1〜#6)', () => {

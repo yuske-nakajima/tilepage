@@ -40,7 +40,7 @@ for (const c of EDGE_CASES) {
 
     test.beforeEach(async ({ page }) => {
       // 専用 demo を持たないため、 root demo を流用しつつ DOM を直接いじって観測する。
-      await page.goto('/');
+      await page.goto('/demo/');
       await page.waitForSelector('.tilepage-book');
       await page.waitForLoadState('networkidle');
       await page.waitForTimeout(500);

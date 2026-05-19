@@ -1,4 +1,6 @@
 /// <reference types="vite/client" />
+
+import merosText from '../../../demo/meros.txt?raw';
 import {
   addFlow,
   addObstacleHorizontal,
@@ -6,8 +8,7 @@ import {
   type Book,
   createBook,
   type Obstacle,
-} from '../../src';
-import merosText from '../meros.txt?raw';
+} from '../../../src';
 
 // columns-variant demo: supportedColumns + breakpoints + whenColumns API。
 // 走れメロス 3 画像を N=2/4/6/8 の variant で配置し、 graceful degradation も確認する。

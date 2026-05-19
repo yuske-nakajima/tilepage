@@ -53,7 +53,7 @@ function buildUrl(params: {
     obstacle: params.obstacle,
     text: params.text,
   });
-  return `/v0.4/?${q.toString()}`;
+  return `/e2e/fixtures/v0.4/?${q.toString()}`;
 }
 
 test.describe('v0.4 flow-engine matrix (V === S)', () => {
@@ -105,7 +105,7 @@ function buildWidthUrl(params: {
     obstacle: params.obstacle,
     text: params.text,
   });
-  return `/v0.4/?${q.toString()}`;
+  return `/e2e/fixtures/v0.4/?${q.toString()}`;
 }
 
 test.describe('v0.4 flow-engine width mode (V === S)', () => {

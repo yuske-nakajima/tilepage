@@ -47,7 +47,7 @@ for (const c of CASES) {
     test.use({ viewport: { width: c.width, height: c.height } });
 
     test.beforeEach(async ({ page }) => {
-      await page.goto('/vertical-meros/');
+      await page.goto('/demo/vertical-meros/');
       await page.waitForSelector('.tilepage-book');
       await page.waitForLoadState('networkidle');
       // 画像 load → variant 再解決 → reflow の追従待ち
