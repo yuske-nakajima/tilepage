@@ -1,13 +1,14 @@
 import {
   addFlow,
-  addObstacle,
+  addObstacleHorizontal,
+  addObstacleVertical,
   addPage,
   type Book,
   type ColumnsConfig,
   createBook,
   type ObstacleShape,
   type WritingMode,
-} from '../../src';
+} from '../../../src';
 
 type ObstacleKind = 'none' | 'rect' | 'circle' | 'polygon';
 
@@ -42,15 +43,14 @@ const DEFAULT_TEXT =
   'duplicate しない、px 固定をしない、visible 文字数で検証する。' +
   '英数字 mix: The quick brown fox jumps over the lazy dog 0123456789.';
 
-function computeObstacleAt(columns: number): { col: string; row: string } {
-  // 中央付近に「全幅の半分以下」のサイズで配置する (全 column を覆わない)。
-  // 1 列以上は流せる位置を残すため、 obstacle が占有する列数は columns-1 を超えないようにする。
-  if (columns <= 1) return { col: '1', row: '1' };
+// 中央付近に「全幅の半分以下」のサイズで obstacle を配置する (全 column を覆わない)。
+// 1 列以上は流せる位置を残すため、 obstacle が占有する列数は columns-1 を超えないようにする。
+// 戻り値は段組み相対の start 段と span (= grid-column-start / grid-column span に流す)。
+function computeObstaclePlacement(columns: number): { start: number; span: number } {
+  if (columns <= 1) return { start: 1, span: 1 };
   const span = Math.max(1, Math.min(columns - 1, Math.ceil(columns / 3)));
   const start = Math.max(1, Math.floor((columns - span) / 2) + 1);
-  const endInclusive = Math.min(columns, start + span - 1);
-  const col = start === endInclusive ? `${start}` : `${start}-${endInclusive}`;
-  return { col, row: '1-2' };
+  return { start, span };
 }
 
 function shapeOf(kind: ObstacleKind): ObstacleShape | null {
@@ -90,15 +90,38 @@ function setup(): void {
   // 配置は columns に応じて book の中央付近に揃え、 grid の implicit 拡張を避ける。
   const shape = shapeOf(params.obstacle);
   if (shape) {
-    const firstPage = addPage(book);
+    addPage(book);
     // width モード時は page 作成時の book.columns (実測 N) を使う。
     const effectiveColumns = book.columns;
-    const obstacleAt = computeObstacleAt(effectiveColumns);
-    addObstacle(firstPage, {
-      at: obstacleAt,
-      shape,
-      shapeMargin: '0.8em',
-    });
+    const placement = computeObstaclePlacement(effectiveColumns);
+    if (params.writingMode === 'vertical-rl') {
+      // 縦書きでは段組み相対の「高さ」 = rows、 「char 位置」 = at.char。
+      addObstacleVertical(book, {
+        shape,
+        shapeMargin: '0.8em',
+        whenColumns: {
+          [effectiveColumns]: {
+            page: 1,
+            at: { row: placement.start, char: 1 },
+            rows: placement.span,
+            chars: 2,
+          },
+        },
+      });
+    } else {
+      addObstacleHorizontal(book, {
+        shape,
+        shapeMargin: '0.8em',
+        whenColumns: {
+          [effectiveColumns]: {
+            page: 1,
+            at: { col: placement.start, line: 1 },
+            cols: placement.span,
+            lines: 2,
+          },
+        },
+      });
+    }
   }
 
   addFlow(book, { text: params.text });

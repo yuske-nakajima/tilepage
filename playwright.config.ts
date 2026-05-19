@@ -9,9 +9,10 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   webServer: {
-    // 大きなクエリ文字列で text を投入するため Node の HTTP ヘッダ上限を引き上げる
+    // 大きなクエリ文字列で text を投入するため Node の HTTP ヘッダ上限を引き上げる。
+    // vite dev root はリポジトリ root にしているため、 ready 判定は /demo/ で行う (root 直下に index.html を置かない構成)。
     command: 'node --max-http-header-size=131072 ./node_modules/vite/bin/vite.js',
-    url: 'http://localhost:5173',
+    url: 'http://localhost:5173/demo/',
     reuseExistingServer: true,
   },
   projects: [

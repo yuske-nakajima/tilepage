@@ -29,7 +29,7 @@ const CASES: ReadonlyArray<{
   { width: 1440, height: 900, expectedN: 8 },
 ];
 
-// demo/columns-variant/main.ts の whenColumns 宣言と同期 (起点座標のみ)。
+// demo/e2e/fixtures/columns-variant/main.ts の whenColumns 宣言と同期 (起点座標のみ)。
 // lines は aspect / natural aspect から動的に決まるので assertion 対象外。
 // 「king」は N=6 を意図的に省略。 graceful degrade のテスト対象。
 type VariantSpec = { col: number; line: number; cols: number };
@@ -59,7 +59,7 @@ for (const { width, height, expectedN } of CASES) {
     test.use({ viewport: { width, height } });
 
     test.beforeEach(async ({ page }) => {
-      await page.goto('/columns-variant/');
+      await page.goto('/e2e/fixtures/columns-variant/');
       await page.waitForSelector('#app[data-ready="true"]');
       await page.waitForSelector('.tilepage-book');
       await page.waitForLoadState('networkidle');

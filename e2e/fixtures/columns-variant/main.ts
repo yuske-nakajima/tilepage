@@ -1,6 +1,14 @@
 /// <reference types="vite/client" />
-import { addFlow, addObstacle, addPage, type Book, createBook, type Obstacle } from '../../src';
-import merosText from '../meros.txt?raw';
+
+import merosText from '../../../demo/meros.txt?raw';
+import {
+  addFlow,
+  addObstacleHorizontal,
+  addPage,
+  type Book,
+  createBook,
+  type Obstacle,
+} from '../../../src';
 
 // columns-variant demo: supportedColumns + breakpoints + whenColumns API。
 // 走れメロス 3 画像を N=2/4/6/8 の variant で配置し、 graceful degradation も確認する。
@@ -28,7 +36,7 @@ function tagObstacle(obstacle: Obstacle, id: string): void {
 // 雑誌的に King の大判画像。 N=6 を意図的に省略して graceful degrade を確認する。
 // lines / aspect ともに省略 → 画像 natural aspect から導出される。
 tagObstacle(
-  addObstacle(book, {
+  addObstacleHorizontal(book, {
     shape: 'rect',
     src: '/meros-1-king.png',
     whenColumns: {
@@ -42,7 +50,7 @@ tagObstacle(
 
 // 走るメロス。 全 N (2/4/6/8) で variant を宣言。 aspect '3/2' を明示。
 tagObstacle(
-  addObstacle(book, {
+  addObstacleHorizontal(book, {
     shape: 'circle',
     src: '/meros-2-run.png',
     whenColumns: {
@@ -57,7 +65,7 @@ tagObstacle(
 
 // 再会の polygon。 page 2 に配置。 aspect '3/2' を明示。
 tagObstacle(
-  addObstacle(book, {
+  addObstacleHorizontal(book, {
     shape: {
       type: 'polygon',
       points: [

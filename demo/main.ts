@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import {
   addFlow,
-  addObstacle,
+  addObstacleHorizontal,
   addPage,
   type Book,
   createBook,
@@ -44,7 +44,7 @@ function tagObstacle(obstacle: Obstacle, id: string): void {
 // graceful degrade (display:none) で隠れることを示す。
 // lines / aspect ともに省略 → 画像 natural aspect (1536x1024 = 3:2) から導出される。
 tagObstacle(
-  addObstacle(book, {
+  addObstacleHorizontal(book, {
     shape: 'rect',
     src: '/meros-1-king.png',
     shapeMargin: '0.8em',
@@ -61,7 +61,7 @@ tagObstacle(
 // 走るメロス (circle)。 全 N (2/4/6/8) で variant を宣言。
 // aspect を明示宣言。 cols から lines が導出され、 cell と画像のアスペクト比が一致する。
 tagObstacle(
-  addObstacle(book, {
+  addObstacleHorizontal(book, {
     shape: 'circle',
     src: '/meros-2-run.png',
     shapeMargin: '0.8em',
@@ -77,7 +77,7 @@ tagObstacle(
 
 // 再会 (polygon)。 page=2 に配置。 同じ画像比率に合わせて aspect を明示。
 tagObstacle(
-  addObstacle(book, {
+  addObstacleHorizontal(book, {
     shape: {
       type: 'polygon',
       points: [

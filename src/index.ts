@@ -3,8 +3,10 @@ declare const __VERSION__: string;
 export const VERSION: string = __VERSION__;
 export {
   addFlow,
-  addObstacle,
+  addObstacleHorizontal,
+  addObstacleVertical,
   addPage,
+  type BaseObstacleOptions,
   type Book,
   type BookOptions,
   type ColumnsConfig,
@@ -12,11 +14,13 @@ export {
   destroyBook,
   type FlowOptions,
   type GridPos,
+  type HorizontalObstacleOptions,
+  type HorizontalWhenColumnsVariant,
   type Obstacle,
-  type ObstacleOptions,
   type Page,
   type PageOptions,
-  type WhenColumnsVariant,
+  type VerticalObstacleOptions,
+  type VerticalWhenColumnsVariant,
   type WritingMode,
 } from './TilePage';
 export type { ObstacleShape, Point } from './utils/polygon';

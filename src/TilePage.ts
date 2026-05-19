@@ -50,7 +50,7 @@ export interface Book {
   // addFlow が呼ばれた時点で初期化される。
   _reflow?: ReflowController;
   _observeResize: boolean;
-  // addObstacle(book, ...) で登録された whenColumns 持ち obstacle 群。
+  // addObstacleHorizontal/Vertical(book, ...) で登録された whenColumns 持ち obstacle 群。
   // N 変化時に resolveVariantsForBook で再評価され、 page 間を移動する。
   _variantObstacles: Obstacle[];
 }
@@ -74,13 +74,20 @@ export interface GridPos {
   row: string;
 }
 
-// 段数 N が一致した時に採用される配置 variant。
+// 段数 N が一致した時に採用される配置 variant (内部表現)。
 // at.col / at.line は 1-indexed。 line は obstacle-layer の auto-fill row index。
+// 縦書き variant は内部でこの形式に正規化される (at.row→line, at.char→col, rows→lines, chars→cols)。
 // lines / aspect の解決優先順位:
 //   1. aspect 指定あり → cols から lines を導出 (lines も指定されていれば warn して aspect 優先)
 //   2. aspect 未指定で lines 指定 → そのまま
 //   3. 両方未指定 → 画像 natural aspect (img.naturalWidth / img.naturalHeight) から導出
 //      画像以外 / natural が取れない場合は FALLBACK_LINES (= 4)
+//
+// 縦書き正規化: vertical-rl では CSS Grid が writing-mode に従い軸 swap するため、
+// `grid-column span` (= 内部 cols) が「段組みの段 (column band)」 = 段の数を span する。
+// よって縦書き public API では `chars` を必須 (= 段の数 = 横書き cols 相当)、
+// `rows` を省略可 (= block 軸 line 数 = 横書き lines 相当、 aspect から自動導出可) にして
+// 横書きと完全対称にする。
 export interface WhenColumnsVariant {
   page: number;
   at: { col: number; line: number };
@@ -90,11 +97,48 @@ export interface WhenColumnsVariant {
   aspect?: string;
 }
 
+// 公開 API: 横書き variant。 cols=段組み相対の幅 (grid-column span)。
+export interface HorizontalWhenColumnsVariant {
+  page: number;
+  at: { col: number; line: number };
+  cols: number;
+  lines?: number;
+  aspect?: string;
+}
+
+// 公開 API: 縦書き variant。
+// vertical-rl では CSS Grid の grid-template-columns が inline 軸 (= 物理 Y 軸) を N 等分し、
+// `grid-column span` = 「段組みの段の数」 をそのまま表す (横書きの cols と同じ意味)。
+// よって `chars` が「段の数」 必須、 `rows` (block 軸 line 数) は aspect から自動導出可能で省略可。
+// field 名を `cols/lines` から `rows/chars` に分けることで API 利用者の混乱を避ける。
+export interface VerticalWhenColumnsVariant {
+  page: number;
+  at: { row: number; char: number };
+  rows?: number;
+  chars: number;
+  aspect?: string;
+}
+
+export interface BaseObstacleOptions {
+  shape?: ObstacleShape;
+  src?: string;
+  alt?: string;
+  element?: HTMLElement;
+  shapeMargin?: string;
+  syncClipPath?: boolean;
+}
+
+export interface HorizontalObstacleOptions extends BaseObstacleOptions {
+  whenColumns: Partial<Record<number, HorizontalWhenColumnsVariant>>;
+}
+
+export interface VerticalObstacleOptions extends BaseObstacleOptions {
+  whenColumns: Partial<Record<number, VerticalWhenColumnsVariant>>;
+}
+
+// 内部用 (legacy page-level path / 正規化後形)。 公開 API ではない。
 export interface ObstacleOptions {
-  // legacy: 物理 row 番号で配置する経路。 whenColumns 未指定時のみ有効。
   at?: GridPos;
-  // 段数 N → variant の辞書。 現在の N に一致する variant が選ばれる。
-  // 未一致 N では obstacle が display:none で隠れる (graceful degradation)。
   whenColumns?: Record<number, WhenColumnsVariant>;
   element?: HTMLElement;
   src?: string;
@@ -150,13 +194,6 @@ export function createBook(options: BookOptions = {}): Book {
   root.className = 'tilepage-book';
   const columnsConfig: ColumnsConfig = options.columns ?? 6;
   const writingMode: WritingMode = options.writingMode ?? 'horizontal-tb';
-  // vertical-rl + supportedColumns の組み合わせは line グリッドの軸 swap が
-  // 未整備のため本バージョンでは未対応。 createBook 時点で早期 throw する。
-  if (writingMode === 'vertical-rl' && isSupportedMode(columnsConfig)) {
-    throw new Error(
-      'tilepage: writingMode "vertical-rl" with supportedColumns is not supported yet',
-    );
-  }
   if (options.gutter) root.style.setProperty('--tilepage-gutter', options.gutter);
   if (options.padding) root.style.setProperty('--tilepage-padding', options.padding);
   root.dataset.writingMode = writingMode;
@@ -319,70 +356,100 @@ export function addPage(book: Book, options: PageOptions = {}): Page {
   return pageObj;
 }
 
-// addObstacle は 2 つの呼び出し方を持つ。
-// - addObstacle(page, options): legacy 経路。 options.at の物理 row 番号で配置する。
-// - addObstacle(book, options): whenColumns 経路。 現在 N に対応する variant が
-//   選ばれ、 未一致 N では display:none で隠れる (graceful degradation)。
-export function addObstacle(page: Page, options: ObstacleOptions): Obstacle;
-export function addObstacle(book: Book, options: ObstacleOptions): Obstacle;
-export function addObstacle(target: Page | Book, options: ObstacleOptions): Obstacle {
-  if (isBook(target)) return addObstacleToBook(target, options);
-  return addObstacleToPage(target, options);
-}
-
-// 第一引数の Book / Page 判別。 Book は _variantObstacles を必ず持つ。
-function isBook(target: Page | Book): target is Book {
-  return '_variantObstacles' in target;
-}
-
-function addObstacleToPage(page: Page, options: ObstacleOptions): Obstacle {
-  if (!options.at) {
-    throw new Error('addObstacle(page, ...): options.at is required (legacy path)');
+// 公開 API: 横書き専用 obstacle 配置。
+// whenColumns 経路で、 段数 N と一致する variant が選ばれる。
+// 未一致 N では obstacle が display:none で隠れる (graceful degradation)。
+export function addObstacleHorizontal(book: Book, options: HorizontalObstacleOptions): Obstacle {
+  if (!options.whenColumns) {
+    throw new Error('addObstacleHorizontal(book, ...): options.whenColumns is required');
   }
-  if (options.whenColumns) {
-    throw new Error('addObstacle(page, ...): options.whenColumns must be used with book argument');
-  }
-  const el = createObstacleElement(options);
-  const polygon = normalizeShape(options.shape ?? 'rect');
-  applyClipPath(el, options.shape, polygon);
-
-  const colRange = parseGridRange(options.at.col);
-  const rowRange = parseGridRange(options.at.row);
-  el.style.gridColumn = `${colRange[0]} / ${colRange[1]}`;
-  el.style.gridRow = `${rowRange[0]} / ${rowRange[1]}`;
-  page.obstacleLayer.appendChild(el);
-
-  const obstacle: Obstacle = {
-    element: el,
-    colRange,
-    rowRange,
-    floats: [],
-    shapeMargin: options.shapeMargin ?? '0',
-    polygon,
+  const internal: ObstacleOptions = {
+    ...options,
+    whenColumns: normalizeHorizontalWhenColumns(options.whenColumns),
   };
-  page.obstacles.push(obstacle);
+  return addObstacleToBook(book, internal);
+}
 
-  if (el.tagName === 'IMG' && !(el as HTMLImageElement).complete) {
-    el.addEventListener(
-      'load',
-      () => {
-        reflowObstacles(page);
-        page.book._reflow?.request();
-      },
-      { once: true },
-    );
+// 公開 API: 縦書き専用 obstacle 配置。
+// at.row / at.char / rows / chars を内部 grid に物理 swap してマップする。
+export function addObstacleVertical(book: Book, options: VerticalObstacleOptions): Obstacle {
+  if (!options.whenColumns) {
+    throw new Error('addObstacleVertical(book, ...): options.whenColumns is required');
   }
-  reflowObstacles(page);
-  triggerRedistribute(page.book);
-  return obstacle;
+  const internal: ObstacleOptions = {
+    ...options,
+    whenColumns: normalizeVerticalWhenColumns(options.whenColumns),
+  };
+  return addObstacleToBook(book, internal);
+}
+
+// 縦書き public variant 群を内部 WhenColumnsVariant 形式に正規化する。
+// マッピング:
+//   at.row  → grid-row-start    → 内部 at.line
+//   at.char → grid-column-start → 内部 at.col
+//   rows    → grid-row span     → 内部 lines (= 横書きの lines と同じ logical block 軸 span)
+//   chars   → grid-column span  → 内部 cols  (= 横書きの cols と同じ logical inline 軸 span = 段の数)
+// 内部 WhenColumnsVariant の cols/lines は CSS span に直結する logical 軸 span で、
+//   cols  = grid-column span (= inline 軸 span = 段の数)
+//   lines = grid-row span    (= block  軸 span)
+// CSS Grid は writing-mode に従い軸 swap されるため、 横書き / 縦書き共通の logical 軸で扱える。
+//
+// rows 省略時の挙動: lines を undefined にして resolveLines (cols + aspect → lines) 経路に
+// 載せる。 横書きの lines 省略時挙動と完全対称。
+//
+// aspect の swap: aspect は user 視点の物理 W:H 比 ('3/2' = 物理 W:H = 3:2)。 vertical-rl では
+// 物理 W = logical block, 物理 H = logical inline。 横書きと共通の logical 計算 (resolveLines:
+// cellHeight = cellWidth * h/w) を使うため、 user の aspect 'W/H' を内部 'H/W' に swap して
+// logical block/inline 比に変換する。 image natural aspect の imgIntrinsic も同様に swap する。
+function normalizeVerticalWhenColumns(
+  whenColumns: Partial<Record<number, VerticalWhenColumnsVariant>>,
+): Record<number, WhenColumnsVariant> {
+  const out: Record<number, WhenColumnsVariant> = {};
+  for (const key of Object.keys(whenColumns)) {
+    const n = Number.parseInt(key, 10);
+    const v = whenColumns[n];
+    if (!v) continue;
+    out[n] = {
+      page: v.page,
+      at: { col: v.at.char, line: v.at.row },
+      cols: v.chars,
+      lines: v.rows,
+      aspect: v.aspect !== undefined ? swapAspect(v.aspect) : undefined,
+    };
+  }
+  return out;
+}
+
+// 'W/H' を 'H/W' に swap する。 parseAspect で失敗するフォーマットはそのまま (warn は呼び出し側)。
+// vertical-rl 用に user-facing aspect (物理 W:H) を内部 logical 比 (block/inline = H:W) に変換する。
+function swapAspect(aspect: string): string {
+  const parsed = parseAspect(aspect);
+  if (!parsed) return aspect;
+  return `${parsed.h}/${parsed.w}`;
+}
+
+// 横書き public variant 群を内部形式に正規化する (field 名一致のため shallow copy)。
+function normalizeHorizontalWhenColumns(
+  whenColumns: Partial<Record<number, HorizontalWhenColumnsVariant>>,
+): Record<number, WhenColumnsVariant> {
+  const out: Record<number, WhenColumnsVariant> = {};
+  for (const key of Object.keys(whenColumns)) {
+    const n = Number.parseInt(key, 10);
+    const v = whenColumns[n];
+    if (!v) continue;
+    out[n] = v;
+  }
+  return out;
 }
 
 function addObstacleToBook(book: Book, options: ObstacleOptions): Obstacle {
   if (!options.whenColumns) {
-    throw new Error('addObstacle(book, ...): options.whenColumns is required');
+    throw new Error('addObstacleHorizontal/Vertical: options.whenColumns is required');
   }
   if (options.at) {
-    throw new Error('addObstacle(book, ...): options.at must not be combined with whenColumns');
+    throw new Error(
+      'addObstacleHorizontal/Vertical: options.at must not be combined with whenColumns',
+    );
   }
   const el = createObstacleElement(options);
   const polygon = normalizeShape(options.shape ?? 'rect');
@@ -602,10 +669,14 @@ function attachVariantObstacle(
   const el = obstacle.element;
   el.style.display = '';
   const baseCtx = buildResolveLinesContext(page.book, page);
-  const resolvedLines = resolveLines(variant, {
-    ...baseCtx,
-    imgIntrinsic: getImgIntrinsic(el),
-  });
+  // 画像 natural aspect (img.naturalWidth/Height) は user 視点の物理 W:H。 vertical-rl では
+  // logical block:inline = W:H に対応するため、 resolveLines が期待する「logical inline=w / block=h」
+  // 表現に合わせて w/h を swap する (cellHeight = cellWidth * h/w が縦書きでも正しく cellBlock を出す)。
+  const rawIntrinsic = getImgIntrinsic(el);
+  const imgIntrinsic =
+    rawIntrinsic && page.book.writingMode === 'vertical-rl'
+      ? { w: rawIntrinsic.h, h: rawIntrinsic.w }
+      : rawIntrinsic;
   const projection = axisProjection(page.book.writingMode);
   // obstacle-layer の content area (padding を引いた領域) を基準に maxLines を出す。
   // padding は createBook の宣言値が CSS 変数経由で obstacle-layer に効いている。
@@ -620,10 +691,25 @@ function attachVariantObstacle(
     baseCtx.lineHeightPx > 0 && contentBlockSize > 0
       ? Math.max(1, Math.floor(contentBlockSize / baseCtx.lineHeightPx))
       : Number.POSITIVE_INFINITY;
-  const clamped = clampVariantPlacement(variant, resolvedLines, n, maxLines);
+  // 縦書き専用: aspect 矛盾 (期待 cellBlock > contentBlockSize) を検出した場合、
+  // cols (= 段の数 = user-facing chars) を 1 段ずつデクリメントして整合する最大サイズを採用する。
+  // 横書き経路は touched しない (元の variant をそのまま使う)。
+  const effectiveVariant =
+    page.book.writingMode === 'vertical-rl'
+      ? adjustVerticalVariantForFit(variant, { ...baseCtx, imgIntrinsic }, maxLines, el)
+      : variant;
+  // 横書き / 縦書きとも cols (= grid-column span = 段の数) は variant の必須値 (横書き cols /
+  // 縦書き chars) からそのまま採用し、 lines は resolveLines (cols + aspect → lines) で導出する。
+  // normalize 段階では columnWidthPx 等の実 px が分からないため attach 経路で解決する。
+  const resolvedLines = resolveLines(effectiveVariant, { ...baseCtx, imgIntrinsic });
+  const clamped = clampVariantPlacement(effectiveVariant, resolvedLines, n, maxLines);
   el.style.gridColumn = `${clamped.col} / span ${clamped.cols}`;
   el.style.gridRow = `${clamped.line} / span ${clamped.lines}`;
   el.dataset.whenColumns = String(n);
+  // 縦書き専用: grid cell の物理 aspect (cellBlock / cellInline = 物理 W/H) が
+  // user 指定 aspect (variant.aspect or 画像 natural) と一致しない場合、 cell 内に
+  // aspect 合致する最大 sub-rect を取って bbox を縮める。 横書き経路は touch しない。
+  applyVerticalBboxAspectFit(el, page.book.writingMode, clamped, baseCtx, rawIntrinsic, variant);
   const allReasons = [...pageReasons, ...clamped.reasons];
   if (allReasons.length > 0) {
     el.dataset.clampReasons = allReasons.join(',');
@@ -662,6 +748,163 @@ function attachVariantObstacle(
   obstacle.colRange = [clamped.col, clamped.col + clamped.cols];
   obstacle.rowRange = [clamped.line, clamped.line + clamped.lines];
   obstacle.currentPage = page;
+}
+
+// 縦書き専用: aspect 矛盾を検出して cols (= user-facing chars) を 1 段ずつデクリメントする。
+// 検出条件: 期待 cellBlock (= resolveLines × lineHeightPx) > 利用可能 contentBlockSize。
+// 横書きでは band の物理 X 幅 (= 段幅) と物理 Y 高 (= page 高) のアスペクト比が縦書きと逆で、
+// 一般に cols=1 にしても aspect overflow が起きにくいため、 適用しない (task 仕様)。
+//
+// 最大反復: 10 回 (= 2*8 N 以下に収まる安全装置)。
+// デクリメント不能 (cols=1) で未整合なら、 user 指定の最小可能サイズ (cols=1) を採用 + warn。
+// 結果は element.dataset.rowsAdjusted / clampReasons に記録 (debug 可能性)。
+const MAX_VERTICAL_DECREMENT_ITERATIONS = 10;
+function adjustVerticalVariantForFit(
+  variant: WhenColumnsVariant,
+  ctx: ResolveLinesContext,
+  maxLines: number,
+  el: HTMLElement,
+): WhenColumnsVariant {
+  // 前回 attach 時に立てた dataset reason を必ずリセットする (N 変化で integration 復活する場合)。
+  if (el.dataset.aspectUnachievable) delete el.dataset.aspectUnachievable;
+  if (el.dataset.rowsAdjusted) delete el.dataset.rowsAdjusted;
+  if (!Number.isFinite(maxLines) || maxLines <= 0) return variant;
+  if (ctx.lineHeightPx <= 0) return variant;
+  // aspect 由来の cellBlock 期待値が contentBlockSize を超えていなければ何もしない。
+  const initialLines = resolveLines(variant, ctx);
+  if (initialLines <= maxLines) return variant;
+  // cols を 1 段ずつデクリメントして fit するか試す。
+  let cols = variant.cols;
+  let iter = 0;
+  let probeLines = initialLines;
+  while (cols > 1 && iter < MAX_VERTICAL_DECREMENT_ITERATIONS) {
+    cols -= 1;
+    iter += 1;
+    const probe: WhenColumnsVariant = { ...variant, cols };
+    probeLines = resolveLines(probe, ctx);
+    if (probeLines <= maxLines) {
+      // 整合する最大サイズを発見。
+      el.dataset.rowsAdjusted = String(variant.cols - cols);
+      console.warn('[tilepage] vertical variant cols decremented for aspect fit', {
+        obstacleId: el.dataset.id ?? el.id ?? '(unnamed)',
+        original: { cols: variant.cols, aspect: variant.aspect },
+        adjusted: { cols, lines: probeLines },
+        iterations: iter,
+      });
+      return probe;
+    }
+  }
+  // cols=1 まで下げても整合しない → user 指定の最小可能サイズ (cols=1) を採用。
+  // bbox を aspect に合わせて縮めると cell との gap が生じ text wrap 観点で fail するため、
+  // ここでは bbox = cell のままにする (= aspect 観点は本質的に未達)。 dataset に reason を残し、
+  // 上位レイヤー (test / VLM) で「構造的制約」 として識別できるようにする。
+  el.dataset.rowsAdjusted = String(variant.cols - cols);
+  el.dataset.aspectUnachievable = 'true';
+  console.warn('[tilepage] vertical variant aspect unachievable; using cols=1 (bbox = cell)', {
+    obstacleId: el.dataset.id ?? el.id ?? '(unnamed)',
+    original: { cols: variant.cols, aspect: variant.aspect },
+    adjusted: { cols, requiredLines: probeLines, maxLines },
+    note: 'cell aspect cannot match user aspect; bbox aspect will diverge',
+  });
+  return { ...variant, cols };
+}
+
+// 縦書き専用: grid cell の物理 aspect (= block / inline = 物理 W/H) と user 指定 aspect
+// (variant.aspect or 画像 natural W:H) が乖離する場合、 cell 内に aspect 合致する最大
+// sub-rect を計算し element の inline-size / block-size に直接適用して bbox を縮める。
+// align-self / justify-self を 'start' に固定することで、 縮めた gap が cell の logical
+// end 側 (vertical-rl: 物理 left + 物理 bottom) に発生する。
+//
+// shape-outside polygon は reflowObstacles が getBoundingClientRect から再計算するため、
+// bbox 縮小が text の回り込み境界に正しく波及する (gap 内に text が流入する)。
+//
+// dataset:
+//   bboxShrunk          = 'true' (shrink 適用時)
+//   cellImgGapInline    = inline 軸 gap の px (vertical-rl: 物理 Y 方向 = 下辺寄り)
+//   cellImgGapBlock     = block 軸 gap の px (vertical-rl: 物理 X 方向 = 左辺寄り)
+//
+// 横書き経路は touch しない (cellBlock が contentBlockSize に収まる前提で aspect は cols /
+// lines の整数解で十分近似可能。 縦書き mobile N=2 のような物理 cell 制約が厳しい
+// ケースは横書きでは発生しない)。
+function applyVerticalBboxAspectFit(
+  el: HTMLElement,
+  writingMode: WritingMode,
+  clamped: { cols: number; lines: number },
+  ctx: ResolveLinesContext,
+  rawIntrinsic: { w: number; h: number } | undefined,
+  variant: WhenColumnsVariant,
+): void {
+  // 前回 attach 時の shrink 設定をクリア (N 変化で aspect 整合が回復する場合がある)。
+  const resetShrink = (): void => {
+    if (el.dataset.bboxShrunk) delete el.dataset.bboxShrunk;
+    if (el.dataset.cellImgGapInline) delete el.dataset.cellImgGapInline;
+    if (el.dataset.cellImgGapBlock) delete el.dataset.cellImgGapBlock;
+    el.style.inlineSize = '';
+    el.style.blockSize = '';
+    el.style.justifySelf = '';
+    el.style.alignSelf = '';
+  };
+  if (writingMode !== 'vertical-rl') {
+    resetShrink();
+    return;
+  }
+  if (clamped.cols <= 0 || clamped.lines <= 0 || ctx.lineHeightPx <= 0) {
+    resetShrink();
+    return;
+  }
+  // 物理 W:H 比の決定。 priority: variant.aspect → 画像 natural。
+  // 注意: vertical-rl の internal variant.aspect は normalizeVerticalWhenColumns で
+  // user-facing 'W/H' から logical 'H/W' (= block/inline) に swap 済み。 物理 W = block,
+  // 物理 H = inline なので、 physical W/H = parsed.w / parsed.h ではなく
+  // parsed.w / parsed.h を再度反転して parsed.h / parsed.w を取る (= 元の user W/H)。
+  // rawIntrinsic は getImgIntrinsic から physical (naturalWidth, naturalHeight) なので
+  // そのまま w / h で physical W/H になる (swap 不要)。
+  let targetWH: number | undefined;
+  if (variant.aspect) {
+    const p = parseAspect(variant.aspect);
+    if (p) targetWH = p.h / p.w;
+  }
+  if (targetWH === undefined && rawIntrinsic) {
+    targetWH = rawIntrinsic.w / rawIntrinsic.h;
+  }
+  if (targetWH === undefined || !Number.isFinite(targetWH) || targetWH <= 0) {
+    resetShrink();
+    return;
+  }
+  // cell 物理寸法: vertical-rl では block = X (= 物理 width), inline = Y (= 物理 height)。
+  const cellBlockPx = clamped.lines * ctx.lineHeightPx;
+  const cellInlinePx =
+    clamped.cols * ctx.columnWidthPx + Math.max(0, clamped.cols - 1) * ctx.gutterPx;
+  if (cellBlockPx <= 0 || cellInlinePx <= 0) {
+    resetShrink();
+    return;
+  }
+  const currentWH = cellBlockPx / cellInlinePx;
+  // 0.5% 以内なら shrink 不要 (test 許容は ±5% で十分余裕)。
+  const RELATIVE_EPS = 0.005;
+  if (Math.abs(currentWH - targetWH) / targetWH <= RELATIVE_EPS) {
+    resetShrink();
+    return;
+  }
+  // cell 内に target 比の最大 sub-rect を取る。 まず block 軸 full を試し、 inline がはみ出すなら inline full に切り替える。
+  let bboxBlockPx = cellBlockPx;
+  let bboxInlinePx = cellBlockPx / targetWH;
+  if (bboxInlinePx > cellInlinePx) {
+    bboxInlinePx = cellInlinePx;
+    bboxBlockPx = cellInlinePx * targetWH;
+  }
+  // どちらかが cell を超える数値誤差は clamp で吸収。
+  if (bboxBlockPx > cellBlockPx) bboxBlockPx = cellBlockPx;
+  if (bboxInlinePx > cellInlinePx) bboxInlinePx = cellInlinePx;
+  const gapInline = Math.max(0, cellInlinePx - bboxInlinePx);
+  const gapBlock = Math.max(0, cellBlockPx - bboxBlockPx);
+  el.style.inlineSize = `${bboxInlinePx.toFixed(4)}px`;
+  el.style.blockSize = `${bboxBlockPx.toFixed(4)}px`;
+  el.style.justifySelf = 'start';
+  el.style.alignSelf = 'start';
+  el.dataset.bboxShrunk = 'true';
+  el.dataset.cellImgGapInline = gapInline.toFixed(2);
+  el.dataset.cellImgGapBlock = gapBlock.toFixed(2);
 }
 
 // at.col / at.line / cols / lines を [1, max] に clamp する。
@@ -879,27 +1122,30 @@ function ensureReflowController(book: Book): void {
   });
 }
 
-// 横書きの 2 分割 float (左半分: float-left / 右半分: float-right) を生成する helper。
-// halfXInPage / halfWidthPx は分割後の float box の column 内 page-relative 領域。
-function createHorizontalHalfFloat(
+// 2 分割 float (block 軸 start 寄せ / end 寄せ) を生成する helper。
+// 引数の rect / polygon はいずれも page 相対の物理 px 座標。
+// originPhysX / originPhysY は float box の物理左上 (page 相対)。
+// boxPhysWidth / boxPhysHeight は float box の物理サイズ。
+// `inlineSize` / `blockSize` は CSS logical プロパティ。 horizontal-tb では inline=幅 / block=高、
+// vertical-rl では inline=高 / block=幅 になり、 polygon shape-outside の % は float box の
+// 物理サイズに対する % として解釈される (CSS Shapes 仕様)。
+function createHalfFloat(
   halfPolygon: Point[],
-  columnBox: Rect,
-  halfXInPage: number,
-  halfWidthPx: number,
-  blockSizeRatio: number,
+  originPhysX: number,
+  originPhysY: number,
+  boxPhysWidth: number,
+  boxPhysHeight: number,
+  inlineSizePercent: number,
+  blockSizePercent: number,
   side: 'left' | 'right',
   shapeMargin: string,
 ): HTMLElement {
-  const floatHeightPx = columnBox.height * blockSizeRatio;
-  const floatOriginX = halfXInPage;
-  const floatOriginY = columnBox.y;
-  const inlineRatio = columnBox.width > 0 ? halfWidthPx / columnBox.width : 0;
   const localPoints =
-    halfWidthPx > 0 && floatHeightPx > 0
+    boxPhysWidth > 0 && boxPhysHeight > 0
       ? halfPolygon
           .map(([x, y]) => {
-            const lx = ((x - floatOriginX) / halfWidthPx) * 100;
-            const ly = ((y - floatOriginY) / floatHeightPx) * 100;
+            const lx = ((x - originPhysX) / boxPhysWidth) * 100;
+            const ly = ((y - originPhysY) / boxPhysHeight) * 100;
             return `${lx.toFixed(4)}% ${ly.toFixed(4)}%`;
           })
           .join(', ')
@@ -907,11 +1153,145 @@ function createHorizontalHalfFloat(
   const el = document.createElement('div');
   el.className = 'tilepage-obstacle-float';
   el.style.float = side;
-  el.style.inlineSize = `${(inlineRatio * 100).toFixed(4)}%`;
-  el.style.blockSize = `${(blockSizeRatio * 100).toFixed(4)}%`;
+  el.style.inlineSize = `${inlineSizePercent.toFixed(4)}%`;
+  el.style.blockSize = `${blockSizePercent.toFixed(4)}%`;
   if (localPoints) el.style.shapeOutside = `polygon(${localPoints})`;
   el.style.shapeMargin = shapeMargin;
   return el;
+}
+
+// 物理 X/Y 軸 (left/right または top/bottom) を logical inline/block 軸へ抽象化する。
+// horizontal-tb: inline = X (left→right) / block = Y (top→bottom)
+// vertical-rl:   inline = Y (top→bottom) / block = X (right→left)
+// half float の DOM 配置は inline-start / inline-end 寄せに対応する CSS float 値を返す。
+// CSS float は writing-mode に依存して inline-start/end を解釈するため、
+//   horizontal-tb: inline-start = 'left',  inline-end = 'right'
+//   vertical-rl:   inline-start = 'right' (物理上), inline-end = 'left' (物理下)
+interface LogicalAxisOps {
+  // polygon の各 [x, y] (物理 px) から inline 座標を取り出す
+  inlineOf(p: Point): number;
+  // column 内の inline 中央を Box から計算
+  inlineCenterOfPolygon(poly: Point[]): number;
+  // half rect (inline-start 側 / inline-end 側) を物理 Rect として生成する。
+  // 横書きでは inline=X 方向に左右、 縦書きでは inline=Y 方向に上下に分割する。
+  startHalfRect(columnBox: Rect, inlineCenter: number): Rect;
+  endHalfRect(columnBox: Rect, inlineCenter: number): Rect;
+  // column の inline-size / block-size (物理 px)
+  inlineSize(box: Rect): number;
+  blockSize(box: Rect): number;
+  // polygon の block 軸 end 座標 (column の block-start から最も遠い側)
+  polygonBlockEndOf(poly: Point[]): number;
+  // column の block-end 物理座標
+  columnBlockEnd(box: Rect): number;
+  // float の inline-start / inline-end 寄せ CSS float 値
+  startFloat: 'left' | 'right';
+  endFloat: 'left' | 'right';
+  // float box の物理 origin (top-left の page 相対 px) を返す。
+  // halfRect は startHalfRect/endHalfRect の戻り値、 polygonBlockSpan は float box の block 軸物理 px。
+  // box の inline 軸 origin = halfRect の inline 軸 start、 box の block 軸 origin は
+  //   横書き: column 上端 (block-start)、 box は block-start ↓ polygonBlockSpan を占有
+  //   縦書き: column 右端 - polygonBlockSpan、 box は column block-start (物理右) から block-end (物理左) へ polygonBlockSpan を占有
+  floatBoxOrigin(
+    halfRect: Rect,
+    columnBox: Rect,
+    polygonBlockSpan: number,
+  ): { x: number; y: number };
+  // float box の物理サイズ (width / height)
+  floatBoxSize(halfRect: Rect, polygonBlockSpan: number): { width: number; height: number };
+}
+
+function logicalOps(mode: WritingMode): LogicalAxisOps {
+  if (mode === 'vertical-rl') {
+    // 縦書き: inline = Y (上→下), block = X (右→左)
+    // block-start = column 右端、 block-end = column 左端
+    return {
+      inlineOf: ([, y]) => y,
+      inlineCenterOfPolygon(poly) {
+        const ys = poly.map(([, y]) => y);
+        return (Math.min(...ys) + Math.max(...ys)) / 2;
+      },
+      startHalfRect(columnBox, inlineCenter) {
+        // inline-start = 物理上半分。 Y: [columnBox.y, inlineCenter]
+        return {
+          x: columnBox.x,
+          y: columnBox.y,
+          width: columnBox.width,
+          height: inlineCenter - columnBox.y,
+        };
+      },
+      endHalfRect(columnBox, inlineCenter) {
+        // inline-end = 物理下半分。 Y: [inlineCenter, columnBox.y + columnBox.height]
+        return {
+          x: columnBox.x,
+          y: inlineCenter,
+          width: columnBox.width,
+          height: columnBox.y + columnBox.height - inlineCenter,
+        };
+      },
+      inlineSize: (box) => box.height,
+      blockSize: (box) => box.width,
+      polygonBlockEndOf: (poly) => Math.min(...poly.map(([x]) => x)),
+      columnBlockEnd: (box) => box.x,
+      // CSS Writing Modes 3 (line-left/right): vertical-rl では
+      //   float: left  = line-left  = 物理 top    = inline-start
+      //   float: right = line-right = 物理 bottom = inline-end
+      // 横書き (horizontal-tb) と「inline-start = left / inline-end = right」 が
+      // 完全に一致する。 startHalfRect は inline-start (= 物理上半分) を覆い、
+      // float: left でその上半分に配置されるため shape の物理位置と一致する。
+      startFloat: 'left',
+      endFloat: 'right',
+      floatBoxOrigin(halfRect, columnBox, polygonBlockSpan) {
+        // 縦書き: box 物理 X 範囲 = (column 右端 - polygonBlockSpan) ~ column 右端
+        return {
+          x: columnBox.x + columnBox.width - polygonBlockSpan,
+          y: halfRect.y,
+        };
+      },
+      floatBoxSize(halfRect, polygonBlockSpan) {
+        // 縦書き: box 物理 width = polygonBlockSpan (= block 軸方向)、 box 物理 height = halfRect.height (= inline 軸方向)
+        return { width: polygonBlockSpan, height: halfRect.height };
+      },
+    };
+  }
+  // 横書き: inline = X (左→右), block = Y (上→下)
+  // block-start = column 上端、 block-end = column 下端
+  return {
+    inlineOf: ([x]) => x,
+    inlineCenterOfPolygon(poly) {
+      const xs = poly.map(([x]) => x);
+      return (Math.min(...xs) + Math.max(...xs)) / 2;
+    },
+    startHalfRect(columnBox, inlineCenter) {
+      return {
+        x: columnBox.x,
+        y: columnBox.y,
+        width: inlineCenter - columnBox.x,
+        height: columnBox.height,
+      };
+    },
+    endHalfRect(columnBox, inlineCenter) {
+      return {
+        x: inlineCenter,
+        y: columnBox.y,
+        width: columnBox.x + columnBox.width - inlineCenter,
+        height: columnBox.height,
+      };
+    },
+    inlineSize: (box) => box.width,
+    blockSize: (box) => box.height,
+    polygonBlockEndOf: (poly) => Math.max(...poly.map(([, y]) => y)),
+    columnBlockEnd: (box) => box.y + box.height,
+    startFloat: 'left',
+    endFloat: 'right',
+    floatBoxOrigin(halfRect, columnBox, _polygonBlockSpan) {
+      // 横書き: box 物理 X 範囲 = halfRect (左 half / 右 half)、 物理 Y 範囲 = column 上端 ~ +polygonBlockSpan
+      return { x: halfRect.x, y: columnBox.y };
+    },
+    floatBoxSize(halfRect, polygonBlockSpan) {
+      // 横書き: box 物理 width = halfRect.width、 box 物理 height = polygonBlockSpan
+      return { width: halfRect.width, height: polygonBlockSpan };
+    },
+  };
 }
 
 function reflowObstacles(page: Page): void {
@@ -920,8 +1300,8 @@ function reflowObstacles(page: Page): void {
     obstacle.floats.length = 0;
   }
 
-  // line-height は CSS 変数で book.root に保持されている。 column 底に 1 行未満の
-  // residual が残ると text が overflow:hidden で滲み出すため、 float の block-size を
+  // line-height は CSS 変数で book.root に保持されている。 column 末端 (block-end) に
+  // 1 行未満の residual が残ると text が overflow:hidden で滲み出すため、 float の block-size を
   // 延長して埋めるのに使う。
   const rootCs = getComputedStyle(page.book.root);
   const lhVar = Number.parseFloat(rootCs.getPropertyValue('--tilepage-line-height').trim());
@@ -930,8 +1310,7 @@ function reflowObstacles(page: Page): void {
   const pageRect = page.element.getBoundingClientRect();
   if (pageRect.width === 0 || pageRect.height === 0) return;
 
-  const projection = axisProjection(page.book.writingMode);
-  const floatSide = projection.floatSide();
+  const ops = logicalOps(page.book.writingMode);
 
   for (const obstacle of page.obstacles) {
     const obRect = obstacle.element.getBoundingClientRect();
@@ -958,113 +1337,89 @@ function reflowObstacles(page: Page): void {
       const clipped = clipPolygonByRect(absPolygon, columnBox);
       if (clipped.length < 3) continue;
 
-      const polygonBottomY = Math.max(...clipped.map(([, y]) => y));
-      const columnBottomY = columnBox.y + columnBox.height;
-      const residualBottom = columnBottomY - polygonBottomY;
-      const fillResidual = lineHeightPx > 0 && residualBottom > 0 && residualBottom < lineHeightPx;
+      // logical 軸での polygon の block-end (横書きで polygon の Y 最大、 縦書きで X 最小) を
+      // 取り、 column の block-end までの residual を計算する。 column 末端に 1 行未満の隙間が
+      // 残れば spacer 出して text の滲みを防ぐ。
+      const polygonBlockEnd = ops.polygonBlockEndOf(clipped);
+      const columnBlockEnd = ops.columnBlockEnd(columnBox);
+      // residual は logical 距離 (常に非負)。 縦書きは block 軸が右→左なので residual = polygonBlockEnd - columnBlockEnd。
+      const residualBlock =
+        page.book.writingMode === 'vertical-rl'
+          ? polygonBlockEnd - columnBlockEnd
+          : columnBlockEnd - polygonBlockEnd;
+      const fillResidual = lineHeightPx > 0 && residualBlock > 0 && residualBlock < lineHeightPx;
 
-      if (floatSide === 'left') {
-        // horizontal-tb: 非矩形 shape の bounding rect 左側 corner にも text を流すため、
-        // clipped polygon を縦中央で 2 分割し、 float-left + float-right の対で inject する。
-        // 各 float の polygon は shape の半分を覆い、 反対側の corner は polygon 外なので
-        // shape-outside 仕様に従い text が流れる。
-        const minX = Math.min(...clipped.map(([x]) => x));
-        const maxX = Math.max(...clipped.map(([x]) => x));
-        const centerX = (minX + maxX) / 2;
+      // clipped polygon を inline-axis の中央で 2 分割し、 各 half polygon を shape-outside と
+      // して float に張る。 DOM 順は [startHalf (inline-start 寄せ), endHalf (inline-end 寄せ),
+      // spacer] とすることで、 同一 line に 2 half が並んで shape 中央を text に明け渡し、
+      // 4 辺 (logical 4 軸 = inline-start/end + block-start/end) すべてに text が流れる。
+      const inlineCenter = ops.inlineCenterOfPolygon(clipped);
+      const startRect = ops.startHalfRect(columnBox, inlineCenter);
+      const endRect = ops.endHalfRect(columnBox, inlineCenter);
+      const startHalf = clipPolygonByRect(clipped, startRect);
+      const endHalf = clipPolygonByRect(clipped, endRect);
 
-        const leftRect: Rect = {
-          x: columnBox.x,
-          y: columnBox.y,
-          width: centerX - columnBox.x,
-          height: columnBox.height,
-        };
-        const rightRect: Rect = {
-          x: centerX,
-          y: columnBox.y,
-          width: columnBox.x + columnBox.width - centerX,
-          height: columnBox.height,
-        };
+      // 各 float の物理サイズ: inline 軸は half rect の inline-size、 block 軸は column の
+      // block-start から polygon block-end までの距離 (= columnBlockSize - residualBlock)。
+      // column block-start ~ polygon block-start (= obstacle 物理範囲外の logical block-start
+      // 側余白) は float box 内に含まれるが polygon shape 範囲外なので text が流入できる。
+      // この構造は横書きで「画像の上に text が流れる」 機構と完全に対称。
+      const columnInlineSize = ops.inlineSize(columnBox);
+      const columnBlockSize = ops.blockSize(columnBox);
+      const polygonBlockSpan = columnBlockSize - residualBlock;
+      const blockSizePercent = columnBlockSize > 0 ? (polygonBlockSpan / columnBlockSize) * 100 : 0;
 
-        const leftHalf = clipPolygonByRect(clipped, leftRect);
-        const rightHalf = clipPolygonByRect(clipped, rightRect);
+      const anchor = col.firstChild;
 
-        const blockSizeRatio =
-          columnBox.height > 0 ? (polygonBottomY - columnBox.y) / columnBox.height : 0;
-
-        // anchor を固定して順次 insertBefore することで、 DOM 順を [leftFloat, rightFloat, spacer]
-        // に保つ。CSS float は DOM 順に処理されるので、 同じ row で leftFloat(左) + rightFloat(右)
-        // が並び、 spacer (full-width float-left) は次 row に追いやられる。
-        const anchor = col.firstChild;
-        if (leftHalf.length >= 3 && leftRect.width > 0) {
-          const f = createHorizontalHalfFloat(
-            leftHalf,
-            columnBox,
-            leftRect.x,
-            leftRect.width,
-            blockSizeRatio,
-            'left',
-            obstacle.shapeMargin,
-          );
-          col.insertBefore(f, anchor);
-          obstacle.floats.push(f);
-        }
-        if (rightHalf.length >= 3 && rightRect.width > 0) {
-          const f = createHorizontalHalfFloat(
-            rightHalf,
-            columnBox,
-            rightRect.x,
-            rightRect.width,
-            blockSizeRatio,
-            'right',
-            obstacle.shapeMargin,
-          );
-          col.insertBefore(f, anchor);
-          obstacle.floats.push(f);
-        }
-        if (fillResidual) {
-          // column 底に 1 行未満の隙間が残る時、shape を持たない full-width spacer を最後に
-          // inject して text が滲み出すのを防ぐ。 anchor の前に挿入することで [left, right, spacer]
-          // の DOM 順を保つ。
-          const spacer = document.createElement('div');
-          spacer.className = 'tilepage-obstacle-float';
-          spacer.style.float = 'left';
-          spacer.style.inlineSize = '100%';
-          spacer.style.blockSize = `${((residualBottom / columnBox.height) * 100).toFixed(4)}%`;
-          col.insertBefore(spacer, anchor);
-          obstacle.floats.push(spacer);
-        }
-      } else {
-        // vertical-rl は inline 軸が縦になるため split 軸も swap される。
-        // 本実装では horizontal-tb のみ 2 分割対応とし、 縦書きは従来の単一 float のまま。
-        const floatWidthRatio =
-          columnBox.width > 0
-            ? (columnBox.x + columnBox.width - Math.min(...clipped.map(([x]) => x))) /
-              columnBox.width
-            : 0;
-        const floatHeightRatio = 1;
-        const floatOriginX = columnBox.x + columnBox.width * (1 - floatWidthRatio);
-        const floatOriginY = columnBox.y;
-        const floatWidthPx = columnBox.width * floatWidthRatio;
-        const floatHeightPx = columnBox.height * floatHeightRatio;
-        const localPoints =
-          floatWidthPx > 0 && floatHeightPx > 0
-            ? clipped
-                .map(([x, y]) => {
-                  const lx = ((x - floatOriginX) / floatWidthPx) * 100;
-                  const ly = ((y - floatOriginY) / floatHeightPx) * 100;
-                  return `${lx.toFixed(4)}% ${ly.toFixed(4)}%`;
-                })
-                .join(', ')
-            : '';
-        const float = document.createElement('div');
-        float.className = 'tilepage-obstacle-float';
-        float.style.float = 'right';
-        float.style.inlineSize = `${(floatWidthRatio * 100).toFixed(4)}%`;
-        float.style.blockSize = `${(floatHeightRatio * 100).toFixed(4)}%`;
-        if (localPoints) float.style.shapeOutside = `polygon(${localPoints})`;
-        float.style.shapeMargin = obstacle.shapeMargin;
-        col.insertBefore(float, col.firstChild);
-        obstacle.floats.push(float);
+      if (startHalf.length >= 3 && ops.inlineSize(startRect) > 0) {
+        const inlineSizePercent =
+          columnInlineSize > 0 ? (ops.inlineSize(startRect) / columnInlineSize) * 100 : 0;
+        const origin = ops.floatBoxOrigin(startRect, columnBox, polygonBlockSpan);
+        const boxSize = ops.floatBoxSize(startRect, polygonBlockSpan);
+        const f = createHalfFloat(
+          startHalf,
+          origin.x,
+          origin.y,
+          boxSize.width,
+          boxSize.height,
+          inlineSizePercent,
+          blockSizePercent,
+          ops.startFloat,
+          obstacle.shapeMargin,
+        );
+        col.insertBefore(f, anchor);
+        obstacle.floats.push(f);
+      }
+      if (endHalf.length >= 3 && ops.inlineSize(endRect) > 0) {
+        const inlineSizePercent =
+          columnInlineSize > 0 ? (ops.inlineSize(endRect) / columnInlineSize) * 100 : 0;
+        const origin = ops.floatBoxOrigin(endRect, columnBox, polygonBlockSpan);
+        const boxSize = ops.floatBoxSize(endRect, polygonBlockSpan);
+        const f = createHalfFloat(
+          endHalf,
+          origin.x,
+          origin.y,
+          boxSize.width,
+          boxSize.height,
+          inlineSizePercent,
+          blockSizePercent,
+          ops.endFloat,
+          obstacle.shapeMargin,
+        );
+        col.insertBefore(f, anchor);
+        obstacle.floats.push(f);
+      }
+      if (fillResidual) {
+        // column 末端 (block-end) に 1 行未満の隙間が残る時、 shape を持たない full-inline
+        // spacer を最後に inject して text が滲み出すのを防ぐ。 anchor の前に挿入することで
+        // [startHalf, endHalf, spacer] の DOM 順を保つ。
+        const spacer = document.createElement('div');
+        spacer.className = 'tilepage-obstacle-float';
+        spacer.style.float = ops.startFloat;
+        spacer.style.inlineSize = '100%';
+        spacer.style.blockSize = `${((residualBlock / columnBlockSize) * 100).toFixed(4)}%`;
+        col.insertBefore(spacer, anchor);
+        obstacle.floats.push(spacer);
       }
     }
   }

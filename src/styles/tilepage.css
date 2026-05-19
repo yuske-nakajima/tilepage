@@ -57,8 +57,10 @@
 .tilepage-page[data-writing-mode="vertical-rl"] .tilepage-flow-layer,
 .tilepage-page[data-writing-mode="vertical-rl"] .tilepage-obstacle-layer {
   writing-mode: vertical-rl;
-  column-gap: 0;
-  row-gap: var(--tilepage-gutter, 1em);
+  column-gap: var(--tilepage-gutter);
+  row-gap: 0;
+  padding-block: var(--tilepage-padding-block, 1.5em);
+  padding-inline: var(--tilepage-padding-inline, 4em);
 }
 
 .tilepage-column {
@@ -82,5 +84,7 @@
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* cell bbox が clamp 等で画像 natural aspect と食い違う場合に画像自身の aspect を維持。
+     bbox 観点 (Playwright getBoundingClientRect) は cell サイズで不変、 視覚 aspect は contain で保持。 */
+  object-fit: contain;
 }
