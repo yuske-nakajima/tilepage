@@ -39,8 +39,8 @@ const book: Book = createBook({
   container: app,
   writingMode: 'vertical-rl',
   columns: {
-    supported: [2, 4, 6, 8],
-    breakpoints: { 8: '60em', 6: '50em', 4: '45em', 2: '0' },
+    supported: [2, 3, 4, 5, 6, 7, 8],
+    breakpoints: { 8: '140em', 7: '120em', 6: '100em', 5: '80em', 4: '60em', 3: '40em', 2: '0' },
   },
   gutter: '1.5em',
   padding: '4em 1.5em',
@@ -58,17 +58,12 @@ tagObstacle(
     src: '/meros-1-king.png',
     shapeMargin: '0.8em',
     whenColumns: {
-      // N=2 mobile: chars=2 (2 段占有) は adjustVerticalVariantForFit で chars=1 に
-      // auto-decrement されるが、 char=1 / row=1 だと「読み始め段 = column 1」 を
-      // image が占有して冒頭 1 文字「メ」 しか入らない。 横書きの cols=2, line=100 と
-      // 対称的に「読み終わり側 = column 2 (= bottom 段)」 へ image を寄せるため
-      // char=2 を指定する (chars=1 + char=2 → column 2 = bottom 段に image)。
       2: { page: 1, at: { row: 1, char: 2 }, chars: 1, aspect: '3/2' },
-      // N=4 tablet: 中央 2 段に画像。
+      3: { page: 1, at: { row: 1, char: 2 }, chars: 1, aspect: '3/2' },
       4: { page: 1, at: { row: 1, char: 2 }, chars: 2, aspect: '3/2' },
-      // N=6: 中央 3 段。
+      5: { page: 1, at: { row: 1, char: 2 }, chars: 2, aspect: '3/2' },
       6: { page: 1, at: { row: 1, char: 2 }, chars: 3, aspect: '3/2' },
-      // N=8 desktop: 中央 4 段。
+      7: { page: 1, at: { row: 1, char: 2 }, chars: 3, aspect: '3/2' },
       8: { page: 1, at: { row: 1, char: 3 }, chars: 4, aspect: '3/2' },
     },
   }),
@@ -83,11 +78,13 @@ tagObstacle(
     src: '/meros-2-run.png',
     shapeMargin: '0.8em',
     whenColumns: {
-      // N=2 mobile: run image も column 2 (= bottom 段) に置き、 column 1 を本文用に確保。
-      2: { page: 2, at: { row: 4, char: 2 }, chars: 1, aspect: '3/2' },
-      4: { page: 2, at: { row: 3, char: 3 }, chars: 2, aspect: '3/2' },
-      6: { page: 2, at: { row: 5, char: 4 }, chars: 3, aspect: '3/2' },
-      8: { page: 2, at: { row: 5, char: 5 }, chars: 4, aspect: '3/2' },
+      2: { page: 2, at: { row: 1, char: 2 }, chars: 1, aspect: '3/2' },
+      3: { page: 2, at: { row: 1, char: 2 }, chars: 1, aspect: '3/2' },
+      4: { page: 2, at: { row: 1, char: 2 }, chars: 2, aspect: '3/2' },
+      5: { page: 2, at: { row: 1, char: 2 }, chars: 2, aspect: '3/2' },
+      6: { page: 2, at: { row: 1, char: 2 }, chars: 3, aspect: '3/2' },
+      7: { page: 2, at: { row: 1, char: 2 }, chars: 3, aspect: '3/2' },
+      8: { page: 2, at: { row: 1, char: 2 }, chars: 4, aspect: '3/2' },
     },
   }),
   'run',
@@ -108,11 +105,13 @@ tagObstacle(
     src: '/meros-3-reunion.png',
     shapeMargin: '0.8em',
     whenColumns: {
-      // N=2 mobile: reunion image は元から char=2 (column 2 = bottom 段) で正しい。
       2: { page: 3, at: { row: 1, char: 2 }, chars: 1, aspect: '3/2' },
-      4: { page: 3, at: { row: 2, char: 2 }, chars: 2, aspect: '3/2' },
-      6: { page: 3, at: { row: 14, char: 3 }, chars: 3, aspect: '3/2' },
-      8: { page: 3, at: { row: 1, char: 1 }, chars: 4, aspect: '3/2' },
+      3: { page: 3, at: { row: 1, char: 2 }, chars: 1, aspect: '3/2' },
+      4: { page: 3, at: { row: 1, char: 2 }, chars: 2, aspect: '3/2' },
+      5: { page: 3, at: { row: 1, char: 2 }, chars: 2, aspect: '3/2' },
+      6: { page: 3, at: { row: 1, char: 2 }, chars: 3, aspect: '3/2' },
+      7: { page: 3, at: { row: 1, char: 2 }, chars: 3, aspect: '3/2' },
+      8: { page: 3, at: { row: 1, char: 2 }, chars: 4, aspect: '3/2' },
     },
   }),
   'reunion',
