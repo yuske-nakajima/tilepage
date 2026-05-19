@@ -776,11 +776,12 @@ function adjustVerticalVariantForFit(
   // cols を 1 段ずつデクリメントして fit するか試す。
   let cols = variant.cols;
   let iter = 0;
+  let probeLines = initialLines;
   while (cols > 1 && iter < MAX_VERTICAL_DECREMENT_ITERATIONS) {
     cols -= 1;
     iter += 1;
     const probe: WhenColumnsVariant = { ...variant, cols };
-    const probeLines = resolveLines(probe, ctx);
+    probeLines = resolveLines(probe, ctx);
     if (probeLines <= maxLines) {
       // 整合する最大サイズを発見。
       el.dataset.rowsAdjusted = String(variant.cols - cols);
@@ -802,7 +803,7 @@ function adjustVerticalVariantForFit(
   console.warn('[tilepage] vertical variant aspect unachievable; using cols=1 (bbox = cell)', {
     obstacleId: el.dataset.id ?? el.id ?? '(unnamed)',
     original: { cols: variant.cols, aspect: variant.aspect },
-    adjusted: { cols, requiredLines: resolveLines({ ...variant, cols }, ctx), maxLines },
+    adjusted: { cols, requiredLines: probeLines, maxLines },
     note: 'cell aspect cannot match user aspect; bbox aspect will diverge',
   });
   return { ...variant, cols };
@@ -1178,11 +1179,9 @@ interface LogicalAxisOps {
   // column の inline-size / block-size (物理 px)
   inlineSize(box: Rect): number;
   blockSize(box: Rect): number;
-  // polygon の block 軸 start/end 座標 (column の block-start から最も近い側 / 最も遠い側)
-  polygonBlockStartOf(poly: Point[]): number;
+  // polygon の block 軸 end 座標 (column の block-start から最も遠い側)
   polygonBlockEndOf(poly: Point[]): number;
-  // column の block-start / block-end 物理座標
-  columnBlockStart(box: Rect): number;
+  // column の block-end 物理座標
   columnBlockEnd(box: Rect): number;
   // float の inline-start / inline-end 寄せ CSS float 値
   startFloat: 'left' | 'right';
@@ -1231,9 +1230,7 @@ function logicalOps(mode: WritingMode): LogicalAxisOps {
       },
       inlineSize: (box) => box.height,
       blockSize: (box) => box.width,
-      polygonBlockStartOf: (poly) => Math.max(...poly.map(([x]) => x)),
       polygonBlockEndOf: (poly) => Math.min(...poly.map(([x]) => x)),
-      columnBlockStart: (box) => box.x + box.width,
       columnBlockEnd: (box) => box.x,
       // CSS Writing Modes 3 (line-left/right): vertical-rl では
       //   float: left  = line-left  = 物理 top    = inline-start
@@ -1282,9 +1279,7 @@ function logicalOps(mode: WritingMode): LogicalAxisOps {
     },
     inlineSize: (box) => box.width,
     blockSize: (box) => box.height,
-    polygonBlockStartOf: (poly) => Math.min(...poly.map(([, y]) => y)),
     polygonBlockEndOf: (poly) => Math.max(...poly.map(([, y]) => y)),
-    columnBlockStart: (box) => box.y,
     columnBlockEnd: (box) => box.y + box.height,
     startFloat: 'left',
     endFloat: 'right',
