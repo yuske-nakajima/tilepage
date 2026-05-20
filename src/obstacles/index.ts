@@ -1,3 +1,4 @@
+export { addBoxHorizontal, type BoxHorizontalOptions } from './box';
 export {
   _findBestFontSize,
   _fitsAtFontSize,
@@ -18,3 +19,4 @@ export {
   type VerticalWhenColumnsVariant,
   type WhenColumnsVariant,
 } from './obstacle';
+export { addPullquoteHorizontal, type PullquoteHorizontalOptions } from './pullquote';

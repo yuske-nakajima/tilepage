@@ -97,3 +97,29 @@
   overflow: hidden;
   box-sizing: border-box;
 }
+
+/* Pullquote obstacle (<blockquote>)。 引用符は CSS quotes プロパティ + ::before/::after で
+   付与する (text content には含めない方針)。 日本語向けに鉤括弧を初期値にする。 */
+.tilepage-pullquote {
+  margin: 0;
+  box-sizing: border-box;
+  quotes: "「" "」" "『" "』";
+  overflow: hidden;
+}
+.tilepage-pullquote::before {
+  content: open-quote;
+}
+.tilepage-pullquote::after {
+  content: close-quote;
+}
+.tilepage-pullquote cite {
+  display: block;
+  font-style: italic;
+}
+
+/* Box obstacle。 任意 DOM を obstacle セルに収めるための汎用ラッパー。
+   border / padding は呼び出し側から inline style で上書き可能。 */
+.tilepage-box {
+  margin: 0;
+  box-sizing: border-box;
+}
