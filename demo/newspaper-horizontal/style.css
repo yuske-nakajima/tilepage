@@ -1,9 +1,56 @@
-/* newspaper-horizontal showcase 用の上乗せスタイル。 .tilepage-headline は library 側で
-   margin:0 / line-height:1.1 / overflow:hidden が当たる。 ここでは新聞っぽい字面に寄せる
-   font-family / 文字色だけを差し込む。 */
+/* newspaper-horizontal showcase の上乗せスタイル。 ライブラリ側で当たる base style
+   (.tilepage-headline / .tilepage-pullquote / .tilepage-box / .tilepage-flow-text) に
+   新聞っぽい字面を寄せる。 */
+
+/* 見出し: 新聞風の太字明朝。 fitToBox が効く h1 / h3 共通。 */
 .tilepage-headline {
   font-family: "Times New Roman", "游明朝", YuMincho, serif;
   font-weight: 900;
   color: #0a0a0a;
   letter-spacing: -0.02em;
+}
+
+/* 主見出し (h1) と小見出し (h3) の font-size / 重みのコントラスト。 fitToBox は h1 のみ
+   有効なので h3 にだけ固定 font-size を当てる。 */
+h3.tilepage-headline {
+  font-size: 1.4rem;
+  font-weight: 700;
+  border-bottom: 1px solid #888;
+  padding-bottom: 0.2em;
+}
+
+/* プルクオート: 引用符 (「 」) を ::before / ::after に明示宣言。 ライブラリ既定 (open-quote /
+   close-quote) があれば computed 上は同等になる。 */
+.tilepage-pullquote {
+  font-family: "游明朝", YuMincho, "Times New Roman", serif;
+  font-style: italic;
+  color: #333;
+  border-left: 4px solid #0a0a0a;
+  padding-left: 0.8em;
+  margin: 0;
+}
+.tilepage-pullquote::before {
+  content: "「";
+  color: #888;
+}
+.tilepage-pullquote::after {
+  content: "」";
+  color: #888;
+}
+.tilepage-pullquote cite {
+  display: block;
+  font-size: 0.85em;
+  color: #666;
+  text-align: right;
+  font-style: normal;
+}
+.tilepage-pullquote cite::before {
+  content: "— ";
+}
+
+/* Box: border / padding は API パススルー。 ここでは背景色だけ寄せる。 */
+.tilepage-box {
+  background: #faf6ec;
+  font-size: 0.9rem;
+  line-height: 1.5;
 }
