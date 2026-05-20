@@ -13,9 +13,11 @@ export type { WritingMode } from './flow/axis';
 // 既存利用者の import path 互換を維持するため、 TilePage.ts 経由で re-export する。
 export {
   _internalAspect,
+  addHeadlineHorizontal,
   addObstacleHorizontal,
   addObstacleVertical,
   type BaseObstacleOptions,
+  type HeadlineHorizontalOptions,
   type HorizontalObstacleOptions,
   type HorizontalWhenColumnsVariant,
   type Obstacle,

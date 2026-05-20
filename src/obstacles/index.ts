@@ -1,3 +1,10 @@
+export {
+  _findBestFontSize,
+  _fitsAtFontSize,
+  addHeadlineHorizontal,
+  FIT_MAX_ITERATIONS,
+  type HeadlineHorizontalOptions,
+} from './headline';
 export { _internalAspect } from './internal';
 export {
   addObstacleHorizontal,

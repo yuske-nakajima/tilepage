@@ -88,3 +88,12 @@
      bbox 観点 (Playwright getBoundingClientRect) は cell サイズで不変、 視覚 aspect は contain で保持。 */
   object-fit: contain;
 }
+
+/* Headline obstacle (<h1>-<h6>)。 margin を 0 にして obstacle セル内に隙間なく収め、
+   line-height を詰めて fitToBox の二分探索が cell inline-size を直接基準にできるようにする。 */
+.tilepage-headline {
+  margin: 0;
+  line-height: 1.1;
+  overflow: hidden;
+  box-sizing: border-box;
+}

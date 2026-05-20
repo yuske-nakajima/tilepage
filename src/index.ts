@@ -3,6 +3,7 @@ declare const __VERSION__: string;
 export const VERSION: string = __VERSION__;
 export {
   addFlow,
+  addHeadlineHorizontal,
   addObstacleHorizontal,
   addObstacleVertical,
   addPage,
@@ -14,6 +15,7 @@ export {
   destroyBook,
   type FlowOptions,
   type GridPos,
+  type HeadlineHorizontalOptions,
   type HorizontalObstacleOptions,
   type HorizontalWhenColumnsVariant,
   type Obstacle,

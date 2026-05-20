@@ -14,6 +14,10 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(import.meta.dirname, 'demo/index.html'),
+        'newspaper-horizontal': resolve(
+          import.meta.dirname,
+          'demo/newspaper-horizontal/index.html',
+        ),
       },
     },
   },

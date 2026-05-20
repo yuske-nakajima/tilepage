@@ -1,0 +1,9 @@
+/* newspaper-horizontal showcase 用の上乗せスタイル。 .tilepage-headline は library 側で
+   margin:0 / line-height:1.1 / overflow:hidden が当たる。 ここでは新聞っぽい字面に寄せる
+   font-family / 文字色だけを差し込む。 */
+.tilepage-headline {
+  font-family: "Times New Roman", "游明朝", YuMincho, serif;
+  font-weight: 900;
+  color: #0a0a0a;
+  letter-spacing: -0.02em;
+}
