@@ -69,6 +69,11 @@ export interface Book {
   // addObstacleHorizontal/Vertical(book, ...) で登録された whenColumns 持ち obstacle 群。
   // N 変化時に resolveVariantsForBook で再評価され、 page 間を移動する。
   _variantObstacles: Obstacle[];
+  // addFlow で渡された paragraph オプション。 CSS パススルー (data 属性) で本文 column に適用する。
+  // reflow ごとに flow engine が .tilepage-flow-text を再生成しうるため、 MutationObserver で
+  // 新規 holder に追従して属性を再付与する。
+  _paragraph?: ParagraphOptions;
+  _paragraphObserver?: MutationObserver;
 }
 
 export interface PageOptions {
@@ -90,8 +95,26 @@ export interface GridPos {
   row: string;
 }
 
+// 段落整形オプション。 chunk / distribute / measure / reflow / axis を貫通せず、
+// CSS パススルー (data 属性 + CSS セレクタ) で実装する。 値型は CSS プロパティの表現力
+// に合わせて string / boolean / 3 値列挙の混在を許容する。
+export type ParagraphKinsoku = 'strict' | 'normal' | 'none';
+
+export interface ParagraphOptions {
+  // text-indent パススルー。 CSS 長さリテラル ('1em' / '0' 等)。
+  // column 全体に一律適用し、 column 先頭の文字に字下げが効く (段落区切り字下げは未対応)。
+  indent?: string;
+  // text-align: justify を有効にする。 text-align-last は auto 固定。
+  justify?: boolean;
+  // line-break + word-break の組み合わせ。 'none' は line-break: anywhere に倒す。
+  kinsoku?: ParagraphKinsoku;
+  // hanging-punctuation: allow-end を有効にする。
+  hangingPunctuation?: boolean;
+}
+
 export interface FlowOptions {
   text?: string;
+  paragraph?: ParagraphOptions;
 }
 
 export function parseGridRange(s: string): [number, number] {
@@ -288,8 +311,67 @@ export function addPage(book: Book, options: PageOptions = {}): Page {
 // 連続ストリームを N 段に分配し、不足 page は内部で生成する。
 export function addFlow(book: Book, options: FlowOptions = {}): void {
   book._sourceText = options.text ?? '';
+  book._paragraph = options.paragraph;
   runDistribute(book);
   ensureReflowController(book);
+  ensureParagraphObserver(book);
+  applyParagraphToBook(book);
+}
+
+// .tilepage-flow-text に paragraph オプションを data 属性として付与する。
+// indent は CSS attr() の互換性問題を避けるため CSS 変数 (--tilepage-paragraph-indent) 経由で値を流す。
+// paragraph 未指定時 / 個別キー未指定時は属性を一切付けない (criteria 要件)。
+function applyParagraphToHolder(
+  holder: HTMLElement,
+  paragraph: ParagraphOptions | undefined,
+): void {
+  // 既存属性をクリアしてから新規付与する (paragraph 切り替え時の残留を防ぐ)。
+  holder.removeAttribute('data-paragraph-indent');
+  holder.removeAttribute('data-paragraph-justify');
+  holder.removeAttribute('data-paragraph-kinsoku');
+  holder.removeAttribute('data-paragraph-hanging-punctuation');
+  holder.style.removeProperty('--tilepage-paragraph-indent');
+  if (!paragraph) return;
+  if (paragraph.indent !== undefined) {
+    holder.setAttribute('data-paragraph-indent', paragraph.indent);
+    holder.style.setProperty('--tilepage-paragraph-indent', paragraph.indent);
+  }
+  if (paragraph.justify === true) {
+    holder.setAttribute('data-paragraph-justify', 'true');
+  }
+  if (paragraph.kinsoku !== undefined) {
+    holder.setAttribute('data-paragraph-kinsoku', paragraph.kinsoku);
+  }
+  if (paragraph.hangingPunctuation === true) {
+    holder.setAttribute('data-paragraph-hanging-punctuation', 'true');
+  }
+}
+
+function applyParagraphToBook(book: Book): void {
+  const holders = book.root.querySelectorAll<HTMLElement>('.tilepage-flow-text');
+  for (const holder of holders) applyParagraphToHolder(holder, book._paragraph);
+}
+
+// flow engine (src/flow/) は reflow ごとに .tilepage-flow-text を再生成しうる。
+// engine 側に手を入れずに paragraph を反映するため、 book.root 配下の subtree を
+// MutationObserver で監視し、 新規 holder が現れた時に属性を当てる。
+function ensureParagraphObserver(book: Book): void {
+  if (book._paragraphObserver) return;
+  const observer = new MutationObserver((mutations) => {
+    if (!book._paragraph) return;
+    for (const m of mutations) {
+      for (const node of m.addedNodes) {
+        if (!(node instanceof HTMLElement)) continue;
+        if (node.classList.contains('tilepage-flow-text')) {
+          applyParagraphToHolder(node, book._paragraph);
+        }
+        const inner = node.querySelectorAll<HTMLElement>('.tilepage-flow-text');
+        for (const holder of inner) applyParagraphToHolder(holder, book._paragraph);
+      }
+    }
+  });
+  observer.observe(book.root, { childList: true, subtree: true });
+  book._paragraphObserver = observer;
 }
 
 // 既存 page の column 要素群を target 数に揃える。差分のみ DOM 操作する。
@@ -744,6 +826,8 @@ export function reflowObstacles(page: Page): void {
 export function destroyBook(book: Book): void {
   book._reflow?.destroy();
   book._reflow = undefined;
+  book._paragraphObserver?.disconnect();
+  book._paragraphObserver = undefined;
   for (const page of book.pages) {
     page.observer?.disconnect();
   }

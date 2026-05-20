@@ -24,6 +24,8 @@ export {
   type Obstacle,
   type Page,
   type PageOptions,
+  type ParagraphKinsoku,
+  type ParagraphOptions,
   type PullquoteHorizontalOptions,
   type VerticalObstacleOptions,
   type VerticalWhenColumnsVariant,

@@ -114,4 +114,12 @@ tagObstacle(
 
 if (book.pages.length < 1) addPage(book);
 
-addFlow(book, { text: SOURCE_TEXT });
+addFlow(book, {
+  text: SOURCE_TEXT,
+  paragraph: {
+    indent: '1em',
+    justify: true,
+    kinsoku: 'strict',
+    hangingPunctuation: true,
+  },
+});

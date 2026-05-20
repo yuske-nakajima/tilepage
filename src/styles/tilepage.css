@@ -76,6 +76,31 @@
   overflow-wrap: anywhere;
 }
 
+/* 段落整形 (addFlow の paragraph オプション)。 data 属性 + CSS 変数 (--tilepage-paragraph-indent)
+   経由で CSS パススルーする。 値は JS から data 属性と CSS 変数の両方を同期して設定する。 */
+.tilepage-flow-text[data-paragraph-indent] {
+  text-indent: var(--tilepage-paragraph-indent);
+}
+.tilepage-flow-text[data-paragraph-justify="true"] {
+  text-align: justify;
+  text-align-last: auto;
+}
+.tilepage-flow-text[data-paragraph-kinsoku="strict"] {
+  line-break: strict;
+  word-break: keep-all;
+}
+.tilepage-flow-text[data-paragraph-kinsoku="normal"] {
+  line-break: normal;
+  word-break: keep-all;
+}
+.tilepage-flow-text[data-paragraph-kinsoku="none"] {
+  line-break: anywhere;
+  word-break: break-all;
+}
+.tilepage-flow-text[data-paragraph-hanging-punctuation="true"] {
+  hanging-punctuation: allow-end;
+}
+
 .tilepage-obstacle-float {
   visibility: hidden;
 }
