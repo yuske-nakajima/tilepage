@@ -549,6 +549,59 @@ function resolveVariantsForBook(book: Book): void {
     const targetPage = book.pages[resolvedPage - 1];
     attachVariantObstacle(obstacle, targetPage, variant, n, pageReasons);
   }
+  // 配置確定後 1 回だけ衝突検査を走らせる。 reflow ループ内には置かない (hot path 汚染回避)。
+  warnVariantCollisions(book, n);
+}
+
+// whenColumns 配置の grid セル衝突を検出して console.warn する。
+// 同一 page / 同一 N で col-span × line-span 矩形が交差する obstacle ペアを 1 回だけ報告する。
+// throw しない (graceful degradation を維持する)。
+// lines が未指定の variant は line 軸 span=1 として扱う (visual な fallback と一致しないが、
+// 「明示された行範囲が衝突しているか」 を保守的に検出する位置付け)。
+function warnVariantCollisions(book: Book, n: number): void {
+  const pageCount = book.pages.length;
+  if (pageCount === 0) return;
+  interface CollisionEntry {
+    id: string;
+    page: number;
+    colStart: number;
+    colEnd: number;
+    lineStart: number;
+    lineEnd: number;
+  }
+  const entries: CollisionEntry[] = [];
+  for (const obstacle of book._variantObstacles) {
+    if (!obstacle.whenColumns) continue;
+    const variant = obstacle.whenColumns[n];
+    if (!variant) continue;
+    let resolvedPage = variant.page;
+    if (resolvedPage < 1) resolvedPage = 1;
+    else if (resolvedPage > pageCount) resolvedPage = pageCount;
+    const cols = Math.max(1, variant.cols);
+    const lineSpan = Math.max(1, variant.lines ?? 1);
+    entries.push({
+      id: obstacle.element.dataset.id ?? obstacle.element.id ?? '(unnamed)',
+      page: resolvedPage,
+      colStart: variant.at.col,
+      colEnd: variant.at.col + cols,
+      lineStart: variant.at.line,
+      lineEnd: variant.at.line + lineSpan,
+    });
+  }
+  for (let i = 0; i < entries.length; i += 1) {
+    for (let j = i + 1; j < entries.length; j += 1) {
+      const a = entries[i];
+      const b = entries[j];
+      if (a.page !== b.page) continue;
+      const colOverlap = a.colStart < b.colEnd && b.colStart < a.colEnd;
+      const lineOverlap = a.lineStart < b.lineEnd && b.lineStart < a.lineEnd;
+      if (colOverlap && lineOverlap) {
+        console.warn(
+          `[tilepage] whenColumns 配置で N=${n} obstacle が衝突: page=${a.page} "${a.id}" (col=${a.colStart}-${a.colEnd - 1}, line=${a.lineStart}-${a.lineEnd - 1}) ↔ "${b.id}" (col=${b.colStart}-${b.colEnd - 1}, line=${b.lineStart}-${b.lineEnd - 1})`,
+        );
+      }
+    }
+  }
 }
 
 // aspect 未解決時のフォールバック行数。 画像 natural aspect が取れない / 画像以外の DOM 用。

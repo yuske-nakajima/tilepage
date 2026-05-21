@@ -5,6 +5,7 @@ import {
   addPage,
   type Book,
   createBook,
+  defineHeadlineHorizontal,
   type Obstacle,
   VERSION,
 } from '../src';
@@ -98,6 +99,33 @@ tagObstacle(
     },
   }),
   'reunion',
+);
+
+// main title (走れメロス) を h1 として obstacle 層に配置する。
+// king (page 1) と物理的に衝突しない位置を全 N variant で割り当てる:
+//   N=2: king {at:(1,100), cols:2} → main-title を col 1-2 / line 1 に置ける
+//   N=4: king {at:(1,1),   cols:2} → main-title を col 3-4 / line 1 に逃がす
+//   N=6: king {at:(1,1),   cols:3} → main-title を col 4-6 / line 1 に逃がす
+//   N=8: king {at:(1,100), cols:4} → main-title を col 1-8 全幅 / line 1 に置ける
+// fontSize=3em × lineHeight=1.2 = 3.6 base line。 obstacle 層の grid row は本文 line-height
+// で刻まれるため lines=4 を割り当てて h1 glyph 高さが grid row 高さを下回るようにする
+// (= 隣接段の本文と物理 overlap しない)。
+const defineMainTitle = defineHeadlineHorizontal({
+  fontSize: '3em',
+  lineHeight: 1.2,
+  fontWeight: 700,
+});
+tagObstacle(
+  defineMainTitle(book, {
+    text: '走れメロス',
+    whenColumns: {
+      2: { page: 1, at: { col: 1, line: 1 }, cols: 2, lines: 4 },
+      4: { page: 1, at: { col: 3, line: 1 }, cols: 2, lines: 4 },
+      6: { page: 1, at: { col: 4, line: 1 }, cols: 3, lines: 4 },
+      8: { page: 1, at: { col: 1, line: 1 }, cols: 8, lines: 4 },
+    },
+  }),
+  'main-title',
 );
 
 // page=2 の variant がアタッチできるよう少なくとも 2 page 確保。

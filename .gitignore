@@ -16,5 +16,6 @@ e2e/_*.spec.ts
 e2e/inspect-*.spec.ts
 e2e/sprint*-evaluator*.spec.ts
 e2e/_inspect-screenshots/
+e2e/_screenshots/
 _check-*.mjs
 .sprint*-*.mjs
