@@ -45,6 +45,8 @@ export function defineHeadlineHorizontal(
   return (book, options) => {
     const el = document.createElement(HEADLINE_TAG);
     el.textContent = options.text;
+    // UA stylesheet の h1 margin は obstacle-layer grid 配置と噛み合わないためリセットする。
+    el.style.margin = '0';
     applyStyle(el, style);
     return addObstacleHorizontal(book, {
       element: el,

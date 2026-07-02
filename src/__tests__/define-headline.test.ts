@@ -89,6 +89,15 @@ describe('defineHeadlineHorizontal', () => {
     expect(obstacle.element.style.fontFamily).toBe('');
   });
 
+  it('UA stylesheet の h1 margin は常にリセットされる', () => {
+    const book = makeBook();
+    const obstacle = defineHeadlineHorizontal({})(book, {
+      text: 't',
+      whenColumns: { 4: { page: 1, at: { col: 1, line: 1 }, cols: 2, lines: 1 } },
+    });
+    expect(obstacle.element.style.margin).toBe('0px');
+  });
+
   it('同じ factory を 2 回呼び出すと独立した Obstacle を生成する', () => {
     const book = makeBook();
     const factory = defineHeadlineHorizontal({ fontSize: '2em' });
