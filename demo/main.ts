@@ -13,9 +13,8 @@ import merosText from './meros.txt?raw';
 
 // root demo: supportedColumns + breakpoints + whenColumns API による走れメロス組版。
 // breakpoints は viewport >= threshold で最大 N を選ぶ離散スナップ。
-//   N=8: 90em / N=6: 60em / N=4: 40em / N=2: 0 (常に true)
-// 1em = 16px 基準で 320px=N2 / 640px=N4 / 1024px=N6 / 1440px=N8。
-// king は N=6 で意図的に variant を省略し、 graceful degradation を示す。
+//   N=8: 120em / N=6: 80em / N=4: 60em / N=2: 0 (常に true)
+// 1em = 16px 基準で 320px=N2 / 960px=N4 / 1280px=N6 / 1920px=N8。
 
 const app = document.getElementById('app');
 if (!app) throw new Error('#app が見つかりません');
@@ -41,8 +40,7 @@ function tagObstacle(obstacle: Obstacle, id: string): void {
   obstacle.element.setAttribute('data-id', id);
 }
 
-// 王 (king): 雑誌的な大判画像。 N=6 のときだけ variant を省略し
-// graceful degrade (display:none) で隠れることを示す。
+// 王 (king): 雑誌的な大判画像。 全 N (2/4/6/8) で variant を宣言。
 // lines / aspect ともに省略 → 画像 natural aspect (1536x1024 = 3:2) から導出される。
 tagObstacle(
   addObstacleHorizontal(book, {
@@ -88,7 +86,6 @@ tagObstacle(
         [0, 0.5],
       ],
     },
-    // shape: 'rect',
     src: '/meros-3-reunion.png',
     shapeMargin: '0.8em',
     whenColumns: {
