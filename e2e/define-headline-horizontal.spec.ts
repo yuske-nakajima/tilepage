@@ -169,5 +169,124 @@ for (const v of VIEWPORTS) {
         clip,
       });
     });
+
+    test(`全 obstacle は本文 flow text と交差しない (N=${v.expectedN})`, async ({ page }) => {
+      // 同一 column に複数 obstacle の float が積まれると後発の shape 座標が block 方向に
+      // ずれて本文が obstacle に流入する事故を検出する (main-title + king @ N=2 で顕在化した)。
+      // circle / polygon shape は bbox 角の外側 (shape 外) に text が流れるのが仕様なので、
+      // clip-path polygon を実座標に展開して shape polygon vs text rect で交差判定する。
+      const collisions = await page.evaluate(() => {
+        type Pt = [number, number];
+        interface Box {
+          x: number;
+          y: number;
+          width: number;
+          height: number;
+        }
+        // clip-path 'polygon(x% y%, ...)' を bbox 実座標の頂点列に展開。 無ければ bbox 4 隅。
+        const shapePolygonOf = (el: Element, o: DOMRect): Pt[] => {
+          const clip = (el as HTMLElement).style.clipPath;
+          const m = clip?.match(/^polygon\((.+)\)$/);
+          if (m) {
+            const pts: Pt[] = [];
+            for (const pair of m[1].split(',')) {
+              const nums = pair.trim().match(/^([\d.]+)%\s+([\d.]+)%$/);
+              if (!nums) return corners(o);
+              pts.push([
+                o.left + (Number.parseFloat(nums[1]) / 100) * o.width,
+                o.top + (Number.parseFloat(nums[2]) / 100) * o.height,
+              ]);
+            }
+            if (pts.length >= 3) return pts;
+          }
+          return corners(o);
+        };
+        const corners = (o: DOMRect): Pt[] => [
+          [o.left, o.top],
+          [o.right, o.top],
+          [o.right, o.bottom],
+          [o.left, o.bottom],
+        ];
+        const pointInPolygon = ([px, py]: Pt, poly: Pt[]): boolean => {
+          let inside = false;
+          for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+            const [xi, yi] = poly[i];
+            const [xj, yj] = poly[j];
+            if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
+              inside = !inside;
+            }
+          }
+          return inside;
+        };
+        const segmentsIntersect = (a: Pt, b: Pt, c: Pt, d: Pt): boolean => {
+          const cross = (o: Pt, p: Pt, q: Pt) =>
+            (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
+          const d1 = cross(c, d, a);
+          const d2 = cross(c, d, b);
+          const d3 = cross(a, b, c);
+          const d4 = cross(a, b, d);
+          return (
+            ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))
+          );
+        };
+        // subpixel の接触を誤検出しないため text rect を 1px 縮めて判定する。
+        const polygonIntersectsRect = (poly: Pt[], r: DOMRect): boolean => {
+          const eps = 1;
+          const rc: Pt[] = [
+            [r.left + eps, r.top + eps],
+            [r.right - eps, r.top + eps],
+            [r.right - eps, r.bottom - eps],
+            [r.left + eps, r.bottom - eps],
+          ];
+          if (rc[0][0] >= rc[1][0] || rc[0][1] >= rc[3][1]) return false;
+          if (rc.some((p) => pointInPolygon(p, poly))) return true;
+          if (
+            poly.some(
+              (p) => p[0] > rc[0][0] && p[0] < rc[1][0] && p[1] > rc[0][1] && p[1] < rc[3][1],
+            )
+          )
+            return true;
+          for (let i = 0; i < poly.length; i++) {
+            const a = poly[i];
+            const b = poly[(i + 1) % poly.length];
+            for (let j = 0; j < 4; j++) {
+              if (segmentsIntersect(a, b, rc[j], rc[(j + 1) % 4])) return true;
+            }
+          }
+          return false;
+        };
+
+        const found: Array<{ id: string; obstacle: Box; text: Box }> = [];
+        const obstacles = document.querySelectorAll('.tilepage-obstacle');
+        for (const el of Array.from(obstacles)) {
+          const cs = window.getComputedStyle(el);
+          if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+          const o = el.getBoundingClientRect();
+          if (o.width === 0 || o.height === 0) continue;
+          const poly = shapePolygonOf(el, o);
+          for (const ft of Array.from(document.querySelectorAll('.tilepage-flow-text'))) {
+            const walker = document.createTreeWalker(ft, NodeFilter.SHOW_TEXT);
+            let node: Node | null = walker.nextNode();
+            while (node) {
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              for (const r of Array.from(range.getClientRects())) {
+                if (r.width === 0 || r.height === 0) continue;
+                if (polygonIntersectsRect(poly, r)) {
+                  found.push({
+                    id: el.getAttribute('data-id') ?? '(unnamed)',
+                    obstacle: { x: o.x, y: o.y, width: o.width, height: o.height },
+                    text: { x: r.x, y: r.y, width: r.width, height: r.height },
+                  });
+                }
+              }
+              node = walker.nextNode();
+            }
+          }
+        }
+        return found;
+      });
+      expect(collisions, JSON.stringify(collisions.slice(0, 5))).toEqual([]);
+    });
   });
 }
