@@ -5,17 +5,17 @@ import {
   addPage,
   type Book,
   createBook,
+  defineHeadlineVertical,
   type Obstacle,
   VERSION,
 } from '../../src';
 import merosText from '../meros.txt?raw';
 
 // 縦書き (vertical-rl) demo: supportedColumns + breakpoints + whenColumns API による
-// 走れメロスの縦組み。 viewport の高さ (vertical-rl の inline 軸) に応じて段数 N=2/4/6/8 が
+// 走れメロスの縦組み。 viewport の高さ (vertical-rl の inline 軸) に応じて段数 N=2-8 が
 // 切り替わる。 breakpoints の比較対象は window.innerHeight になる。
-//   N=8: 60em / N=6: 50em / N=4: 45em / N=2: 0 (常に true)
-// 1em = 16px 基準で 高さ 960px=N8 / 800px=N6 / 720px=N4 / それ未満=N2。
-// 代表 viewport: 1920x1080(67.5em)=N8 / 1024x768(48em)=N4 / 375x667(41.6em)=N2。
+//   N=8: 140em / N=7: 120em / N=6: 100em / N=5: 80em / N=4: 60em / N=3: 40em / N=2: 0
+// 1em = 16px 基準で H≥2240px=N8 / H≥1920=N7 / H≥1600=N6 / H≥1280=N5 / H≥960=N4 / H≥640=N3 / それ未満=N2。
 //
 // 縦書き whenColumns variant のフィールド意味論:
 //   at.row  = grid-row-start    (block 軸 = 物理 X 方向の起点 = 行 index)
@@ -50,8 +50,31 @@ function tagObstacle(obstacle: Obstacle, id: string): void {
   obstacle.element.setAttribute('data-id', id);
 }
 
-// king (王) — 雑誌的な大判画像。 横書き mobile N=2 で `cols: 2` (両段占有) と対称に
-// 縦書きでは `chars: 2` (両段占有) を採用。 aspect 指定で rows を自動導出する。
+// main-title — 全 N 共通で char 1 / row 1-3 に配置。
+// king は全 N で char≥2 のため char 軸で完全分離。
+const mainTitle = defineHeadlineVertical({
+  fontSize: '1.8em',
+  lineHeight: 1.2,
+  fontWeight: 700,
+});
+tagObstacle(
+  mainTitle(book, {
+    text: '走れメロス',
+    whenColumns: {
+      2: { page: 1, at: { row: 1, char: 1 }, chars: 1, rows: 3 },
+      3: { page: 1, at: { row: 1, char: 1 }, chars: 1, rows: 3 },
+      4: { page: 1, at: { row: 1, char: 1 }, chars: 1, rows: 3 },
+      5: { page: 1, at: { row: 1, char: 1 }, chars: 1, rows: 3 },
+      6: { page: 1, at: { row: 1, char: 1 }, chars: 1, rows: 3 },
+      7: { page: 1, at: { row: 1, char: 1 }, chars: 1, rows: 3 },
+      8: { page: 1, at: { row: 1, char: 1 }, chars: 1, rows: 3 },
+    },
+  }),
+  'main-title',
+);
+
+// king (王) — 雑誌的な大判画像。 N に応じて chars 1-4 を占有。
+// 全 N で at.char >= 2 のため main-title (char 1) と分離。 aspect 指定で rows を自動導出する。
 tagObstacle(
   addObstacleVertical(book, {
     shape: 'rect',
