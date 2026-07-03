@@ -8,6 +8,9 @@ export interface VisibleTextResult {
 export interface VisibleTextOptions {
   // 抽出対象の root selector。省略時は document.body。
   rootSelector?: string;
+  // この selector に一致する要素 (とその子孫) の text を抽出から除外する。
+  // 例: obstacle 層の見出し text を除いて flow text だけを比較したい場合に使う。
+  excludeSelectors?: string[];
   // reading order の比較は後段で行うため helper は DOM 順を維持する。
   // textNode 単位で連結し、1 文字 = 1 emit を保証する。
 }
@@ -19,12 +22,16 @@ export async function visibleTextOf(
 ): Promise<VisibleTextResult> {
   return await page.evaluate(extractVisibleText, {
     rootSelector: options.rootSelector ?? null,
+    excludeSelectors: options.excludeSelectors ?? [],
   });
 }
 
 // page.evaluate に渡す関数。ブラウザ環境で実行される。
 // elementFromPoint / innerText / textContent の単独判定は禁止 (設計文書 L516-L520)。
-function extractVisibleText(args: { rootSelector: string | null }): VisibleTextResult {
+function extractVisibleText(args: {
+  rootSelector: string | null;
+  excludeSelectors: string[];
+}): VisibleTextResult {
   const root: HTMLElement = args.rootSelector
     ? ((document.querySelector(args.rootSelector) as HTMLElement | null) ?? document.body)
     : document.body;
@@ -151,6 +158,9 @@ function extractVisibleText(args: { rootSelector: string | null }): VisibleTextR
       const cs = window.getComputedStyle(parent);
       if (cs.display === 'none' || cs.visibility === 'hidden') {
         return NodeFilter.FILTER_REJECT;
+      }
+      for (const sel of args.excludeSelectors) {
+        if (parent.closest(sel)) return NodeFilter.FILTER_REJECT;
       }
       return NodeFilter.FILTER_ACCEPT;
     },

@@ -5,6 +5,7 @@ import {
   addPage,
   type Book,
   createBook,
+  defineHeadlineHorizontal,
   type Obstacle,
   VERSION,
 } from '../src';
@@ -12,9 +13,8 @@ import merosText from './meros.txt?raw';
 
 // root demo: supportedColumns + breakpoints + whenColumns API による走れメロス組版。
 // breakpoints は viewport >= threshold で最大 N を選ぶ離散スナップ。
-//   N=8: 90em / N=6: 60em / N=4: 40em / N=2: 0 (常に true)
-// 1em = 16px 基準で 320px=N2 / 640px=N4 / 1024px=N6 / 1440px=N8。
-// king は N=6 で意図的に variant を省略し、 graceful degradation を示す。
+//   N=8: 120em / N=6: 80em / N=4: 60em / N=2: 0 (常に true)
+// 1em = 16px 基準で 320px=N2 / 960px=N4 / 1280px=N6 / 1920px=N8。
 
 const app = document.getElementById('app');
 if (!app) throw new Error('#app が見つかりません');
@@ -40,8 +40,7 @@ function tagObstacle(obstacle: Obstacle, id: string): void {
   obstacle.element.setAttribute('data-id', id);
 }
 
-// 王 (king): 雑誌的な大判画像。 N=6 のときだけ variant を省略し
-// graceful degrade (display:none) で隠れることを示す。
+// 王 (king): 雑誌的な大判画像。 全 N (2/4/6/8) で variant を宣言。
 // lines / aspect ともに省略 → 画像 natural aspect (1536x1024 = 3:2) から導出される。
 tagObstacle(
   addObstacleHorizontal(book, {
@@ -87,7 +86,6 @@ tagObstacle(
         [0, 0.5],
       ],
     },
-    // shape: 'rect',
     src: '/meros-3-reunion.png',
     shapeMargin: '0.8em',
     whenColumns: {
@@ -98,6 +96,33 @@ tagObstacle(
     },
   }),
   'reunion',
+);
+
+// main title (走れメロス) を h1 として obstacle 層に配置する。
+// king (page 1) と物理的に衝突しない位置を全 N variant で割り当てる:
+//   N=2: king {at:(1,100), cols:2} → main-title を col 1-2 / line 1 に置ける
+//   N=4: king {at:(1,1),   cols:2} → main-title を col 3-4 / line 1 に逃がす
+//   N=6: king {at:(1,1),   cols:3} → main-title を col 4-6 / line 1 に逃がす
+//   N=8: king {at:(1,100), cols:4} → main-title を col 1-8 全幅 / line 1 に置ける
+// fontSize=3em × lineHeight=1.2 = 3.6 base line。 obstacle 層の grid row は本文 line-height
+// で刻まれるため lines=4 を割り当てて h1 glyph 高さが grid row 高さを下回るようにする
+// (= 隣接段の本文と物理 overlap しない)。
+const defineMainTitle = defineHeadlineHorizontal({
+  fontSize: '3em',
+  lineHeight: 1.2,
+  fontWeight: 700,
+});
+tagObstacle(
+  defineMainTitle(book, {
+    text: '走れメロス',
+    whenColumns: {
+      2: { page: 1, at: { col: 1, line: 1 }, cols: 2, lines: 4 },
+      4: { page: 1, at: { col: 3, line: 1 }, cols: 2, lines: 4 },
+      6: { page: 1, at: { col: 4, line: 1 }, cols: 3, lines: 4 },
+      8: { page: 1, at: { col: 1, line: 1 }, cols: 8, lines: 4 },
+    },
+  }),
+  'main-title',
 );
 
 // page=2 の variant がアタッチできるよう少なくとも 2 page 確保。

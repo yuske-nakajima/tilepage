@@ -549,6 +549,59 @@ function resolveVariantsForBook(book: Book): void {
     const targetPage = book.pages[resolvedPage - 1];
     attachVariantObstacle(obstacle, targetPage, variant, n, pageReasons);
   }
+  // 配置確定後 1 回だけ衝突検査を走らせる。 reflow ループ内には置かない (hot path 汚染回避)。
+  warnVariantCollisions(book, n);
+}
+
+// whenColumns 配置の grid セル衝突を検出して console.warn する。
+// 同一 page / 同一 N で col-span × line-span 矩形が交差する obstacle ペアを 1 回だけ報告する。
+// throw しない (graceful degradation を維持する)。
+// lines が未指定の variant は line 軸 span=1 として扱う (visual な fallback と一致しないが、
+// 「明示された行範囲が衝突しているか」 を保守的に検出する位置付け)。
+function warnVariantCollisions(book: Book, n: number): void {
+  const pageCount = book.pages.length;
+  if (pageCount === 0) return;
+  interface CollisionEntry {
+    id: string;
+    page: number;
+    colStart: number;
+    colEnd: number;
+    lineStart: number;
+    lineEnd: number;
+  }
+  const entries: CollisionEntry[] = [];
+  for (const obstacle of book._variantObstacles) {
+    if (!obstacle.whenColumns) continue;
+    const variant = obstacle.whenColumns[n];
+    if (!variant) continue;
+    let resolvedPage = variant.page;
+    if (resolvedPage < 1) resolvedPage = 1;
+    else if (resolvedPage > pageCount) resolvedPage = pageCount;
+    const cols = Math.max(1, variant.cols);
+    const lineSpan = Math.max(1, variant.lines ?? 1);
+    entries.push({
+      id: obstacle.element.dataset.id ?? obstacle.element.id ?? '(unnamed)',
+      page: resolvedPage,
+      colStart: variant.at.col,
+      colEnd: variant.at.col + cols,
+      lineStart: variant.at.line,
+      lineEnd: variant.at.line + lineSpan,
+    });
+  }
+  for (let i = 0; i < entries.length; i += 1) {
+    for (let j = i + 1; j < entries.length; j += 1) {
+      const a = entries[i];
+      const b = entries[j];
+      if (a.page !== b.page) continue;
+      const colOverlap = a.colStart < b.colEnd && b.colStart < a.colEnd;
+      const lineOverlap = a.lineStart < b.lineEnd && b.lineStart < a.lineEnd;
+      if (colOverlap && lineOverlap) {
+        console.warn(
+          `[tilepage] whenColumns 配置で N=${n} obstacle が衝突: page=${a.page} "${a.id}" (col=${a.colStart}-${a.colEnd - 1}, line=${a.lineStart}-${a.lineEnd - 1}) ↔ "${b.id}" (col=${b.colStart}-${b.colEnd - 1}, line=${b.lineStart}-${b.lineEnd - 1})`,
+        );
+      }
+    }
+  }
 }
 
 // aspect 未解決時のフォールバック行数。 画像 natural aspect が取れない / 画像以外の DOM 用。
@@ -1187,17 +1240,22 @@ interface LogicalAxisOps {
   startFloat: 'left' | 'right';
   endFloat: 'left' | 'right';
   // float box の物理 origin (top-left の page 相対 px) を返す。
-  // halfRect は startHalfRect/endHalfRect の戻り値、 polygonBlockSpan は float box の block 軸物理 px。
-  // box の inline 軸 origin = halfRect の inline 軸 start、 box の block 軸 origin は
-  //   横書き: column 上端 (block-start)、 box は block-start ↓ polygonBlockSpan を占有
-  //   縦書き: column 右端 - polygonBlockSpan、 box は column block-start (物理右) から block-end (物理左) へ polygonBlockSpan を占有
+  // halfRect は startHalfRect/endHalfRect の戻り値、 polygonBlockSpan は column block-start から
+  // polygon block-end までの物理 px、 cursorBlock は同一 column 内で先行 obstacle の float が
+  // 消費済みの block 軸物理 px。 float は normal flow で block 方向に積まれるため、 box は
+  // block 軸で cursorBlock だけずれた位置から始まる。
+  // box の inline 軸 origin = halfRect の inline 軸 start、 box の block 軸範囲は
+  //   横書き: column 上端 + cursorBlock から polygon block-end まで
+  //   縦書き: column 右端 - polygonBlockSpan から column 右端 - cursorBlock まで
   floatBoxOrigin(
     halfRect: Rect,
     columnBox: Rect,
     polygonBlockSpan: number,
+    cursorBlock: number,
   ): { x: number; y: number };
-  // float box の物理サイズ (width / height)
-  floatBoxSize(halfRect: Rect, polygonBlockSpan: number): { width: number; height: number };
+  // float box の物理サイズ (width / height)。 floatBlockSpan は box の block 軸物理 px
+  // (= polygonBlockSpan - cursorBlock)。
+  floatBoxSize(halfRect: Rect, floatBlockSpan: number): { width: number; height: number };
 }
 
 function logicalOps(mode: WritingMode): LogicalAxisOps {
@@ -1240,16 +1298,17 @@ function logicalOps(mode: WritingMode): LogicalAxisOps {
       // float: left でその上半分に配置されるため shape の物理位置と一致する。
       startFloat: 'left',
       endFloat: 'right',
-      floatBoxOrigin(halfRect, columnBox, polygonBlockSpan) {
-        // 縦書き: box 物理 X 範囲 = (column 右端 - polygonBlockSpan) ~ column 右端
+      floatBoxOrigin(halfRect, columnBox, polygonBlockSpan, _cursorBlock) {
+        // 縦書き: box 物理 X 範囲 = (column 右端 - polygonBlockSpan) ~ (column 右端 - cursorBlock)。
+        // 左端 (= origin x) は cursorBlock に依存しない。
         return {
           x: columnBox.x + columnBox.width - polygonBlockSpan,
           y: halfRect.y,
         };
       },
-      floatBoxSize(halfRect, polygonBlockSpan) {
-        // 縦書き: box 物理 width = polygonBlockSpan (= block 軸方向)、 box 物理 height = halfRect.height (= inline 軸方向)
-        return { width: polygonBlockSpan, height: halfRect.height };
+      floatBoxSize(halfRect, floatBlockSpan) {
+        // 縦書き: box 物理 width = floatBlockSpan (= block 軸方向)、 box 物理 height = halfRect.height (= inline 軸方向)
+        return { width: floatBlockSpan, height: halfRect.height };
       },
     };
   }
@@ -1283,13 +1342,13 @@ function logicalOps(mode: WritingMode): LogicalAxisOps {
     columnBlockEnd: (box) => box.y + box.height,
     startFloat: 'left',
     endFloat: 'right',
-    floatBoxOrigin(halfRect, columnBox, _polygonBlockSpan) {
-      // 横書き: box 物理 X 範囲 = halfRect (左 half / 右 half)、 物理 Y 範囲 = column 上端 ~ +polygonBlockSpan
-      return { x: halfRect.x, y: columnBox.y };
+    floatBoxOrigin(halfRect, columnBox, _polygonBlockSpan, cursorBlock) {
+      // 横書き: box 物理 X 範囲 = halfRect (左 half / 右 half)、 物理 Y 範囲 = (column 上端 + cursorBlock) ~ polygon block-end
+      return { x: halfRect.x, y: columnBox.y + cursorBlock };
     },
-    floatBoxSize(halfRect, polygonBlockSpan) {
-      // 横書き: box 物理 width = halfRect.width、 box 物理 height = polygonBlockSpan
-      return { width: halfRect.width, height: polygonBlockSpan };
+    floatBoxSize(halfRect, floatBlockSpan) {
+      // 横書き: box 物理 width = halfRect.width、 box 物理 height = floatBlockSpan
+      return { width: halfRect.width, height: floatBlockSpan };
     },
   };
 }
@@ -1312,6 +1371,8 @@ function reflowObstacles(page: Page): void {
 
   const ops = logicalOps(page.book.writingMode);
 
+  // obstacle ごとの polygon を page 絶対座標へ展開しておく
+  const absPolygons = new Map<Obstacle, Point[]>();
   for (const obstacle of page.obstacles) {
     const obRect = obstacle.element.getBoundingClientRect();
     const obstacleBox: Rect = {
@@ -1320,33 +1381,67 @@ function reflowObstacles(page: Page): void {
       width: obRect.width,
       height: obRect.height,
     };
-    // 正規化された polygon を obstacle 要素のページ絶対座標に展開
-    const absPolygon: Point[] = obstacle.polygon.map(([nx, ny]) => [
-      obstacleBox.x + nx * obstacleBox.width,
-      obstacleBox.y + ny * obstacleBox.height,
-    ]);
+    absPolygons.set(
+      obstacle,
+      obstacle.polygon.map(([nx, ny]) => [
+        obstacleBox.x + nx * obstacleBox.width,
+        obstacleBox.y + ny * obstacleBox.height,
+      ]),
+    );
+  }
 
-    for (const col of page.columnElements) {
-      const colRect = col.getBoundingClientRect();
-      const columnBox: Rect = {
-        x: colRect.left - pageRect.left,
-        y: colRect.top - pageRect.top,
-        width: colRect.width,
-        height: colRect.height,
-      };
-      const clipped = clipPolygonByRect(absPolygon, columnBox);
+  for (const col of page.columnElements) {
+    const colRect = col.getBoundingClientRect();
+    const columnBox: Rect = {
+      x: colRect.left - pageRect.left,
+      y: colRect.top - pageRect.top,
+      width: colRect.width,
+      height: colRect.height,
+    };
+    const columnInlineSize = ops.inlineSize(columnBox);
+    const columnBlockSize = ops.blockSize(columnBox);
+    const columnBlockEnd = ops.columnBlockEnd(columnBox);
+
+    // この column と交差する obstacle を集める。
+    // logical 軸での polygon の block-end (横書きで polygon の Y 最大、 縦書きで X 最小) を
+    // 取り、 column の block-end までの residual を計算する。 column 末端に 1 行未満の隙間が
+    // 残れば spacer 出して text の滲みを防ぐ。
+    // residual は logical 距離 (常に非負)。 縦書きは block 軸が右→左なので residual = polygonBlockEnd - columnBlockEnd。
+    const entries: Array<{
+      obstacle: Obstacle;
+      clipped: Point[];
+      polygonBlockSpan: number;
+      residualBlock: number;
+    }> = [];
+    for (const obstacle of page.obstacles) {
+      const clipped = clipPolygonByRect(absPolygons.get(obstacle) ?? [], columnBox);
       if (clipped.length < 3) continue;
-
-      // logical 軸での polygon の block-end (横書きで polygon の Y 最大、 縦書きで X 最小) を
-      // 取り、 column の block-end までの residual を計算する。 column 末端に 1 行未満の隙間が
-      // 残れば spacer 出して text の滲みを防ぐ。
       const polygonBlockEnd = ops.polygonBlockEndOf(clipped);
-      const columnBlockEnd = ops.columnBlockEnd(columnBox);
-      // residual は logical 距離 (常に非負)。 縦書きは block 軸が右→左なので residual = polygonBlockEnd - columnBlockEnd。
       const residualBlock =
         page.book.writingMode === 'vertical-rl'
           ? polygonBlockEnd - columnBlockEnd
           : columnBlockEnd - polygonBlockEnd;
+      entries.push({
+        obstacle,
+        clipped,
+        polygonBlockSpan: columnBlockSize - residualBlock,
+        residualBlock,
+      });
+    }
+    // float は normal flow で block 方向に積まれるため、 同一 column に複数 obstacle が居る場合、
+    // 後発 obstacle の float box は先行 float が消費した block 領域 (cursorBlock) の直後から
+    // 始まる。 block-end が block-start に近い順に処理し、 各 float の block-size と shape 座標を
+    // cursorBlock 起点で計算する。
+    entries.sort((a, b) => a.polygonBlockSpan - b.polygonBlockSpan);
+
+    const anchor = col.firstChild;
+    let cursorBlock = 0;
+
+    for (const entry of entries) {
+      const { obstacle, clipped, polygonBlockSpan, residualBlock } = entry;
+      // 先行 obstacle の float が block 領域を覆い済みなら float 不要 (block 軸で重なる配置)。
+      const floatBlockSpan = polygonBlockSpan - cursorBlock;
+      if (floatBlockSpan <= 0) continue;
       const fillResidual = lineHeightPx > 0 && residualBlock > 0 && residualBlock < lineHeightPx;
 
       // clipped polygon を inline-axis の中央で 2 分割し、 各 half polygon を shape-outside と
@@ -1359,23 +1454,17 @@ function reflowObstacles(page: Page): void {
       const startHalf = clipPolygonByRect(clipped, startRect);
       const endHalf = clipPolygonByRect(clipped, endRect);
 
-      // 各 float の物理サイズ: inline 軸は half rect の inline-size、 block 軸は column の
-      // block-start から polygon block-end までの距離 (= columnBlockSize - residualBlock)。
-      // column block-start ~ polygon block-start (= obstacle 物理範囲外の logical block-start
-      // 側余白) は float box 内に含まれるが polygon shape 範囲外なので text が流入できる。
+      // 各 float の物理サイズ: inline 軸は half rect の inline-size、 block 軸は cursorBlock
+      // から polygon block-end までの距離 (= polygonBlockSpan - cursorBlock)。
+      // float box 内の polygon shape 範囲外 (block-start 側余白等) には text が流入できる。
       // この構造は横書きで「画像の上に text が流れる」 機構と完全に対称。
-      const columnInlineSize = ops.inlineSize(columnBox);
-      const columnBlockSize = ops.blockSize(columnBox);
-      const polygonBlockSpan = columnBlockSize - residualBlock;
-      const blockSizePercent = columnBlockSize > 0 ? (polygonBlockSpan / columnBlockSize) * 100 : 0;
-
-      const anchor = col.firstChild;
+      const blockSizePercent = columnBlockSize > 0 ? (floatBlockSpan / columnBlockSize) * 100 : 0;
 
       if (startHalf.length >= 3 && ops.inlineSize(startRect) > 0) {
         const inlineSizePercent =
           columnInlineSize > 0 ? (ops.inlineSize(startRect) / columnInlineSize) * 100 : 0;
-        const origin = ops.floatBoxOrigin(startRect, columnBox, polygonBlockSpan);
-        const boxSize = ops.floatBoxSize(startRect, polygonBlockSpan);
+        const origin = ops.floatBoxOrigin(startRect, columnBox, polygonBlockSpan, cursorBlock);
+        const boxSize = ops.floatBoxSize(startRect, floatBlockSpan);
         const f = createHalfFloat(
           startHalf,
           origin.x,
@@ -1393,8 +1482,8 @@ function reflowObstacles(page: Page): void {
       if (endHalf.length >= 3 && ops.inlineSize(endRect) > 0) {
         const inlineSizePercent =
           columnInlineSize > 0 ? (ops.inlineSize(endRect) / columnInlineSize) * 100 : 0;
-        const origin = ops.floatBoxOrigin(endRect, columnBox, polygonBlockSpan);
-        const boxSize = ops.floatBoxSize(endRect, polygonBlockSpan);
+        const origin = ops.floatBoxOrigin(endRect, columnBox, polygonBlockSpan, cursorBlock);
+        const boxSize = ops.floatBoxSize(endRect, floatBlockSpan);
         const f = createHalfFloat(
           endHalf,
           origin.x,
@@ -1421,6 +1510,7 @@ function reflowObstacles(page: Page): void {
         col.insertBefore(spacer, anchor);
         obstacle.floats.push(spacer);
       }
+      cursorBlock = polygonBlockSpan;
     }
   }
 }
