@@ -3,8 +3,11 @@ declare const __VERSION__: string;
 export const VERSION: string = __VERSION__;
 export {
   defineHeadlineHorizontal,
+  defineHeadlineVertical,
   type HeadlineHorizontalOptions,
   type HeadlineHorizontalStyle,
+  type HeadlineVerticalOptions,
+  type HeadlineVerticalStyle,
 } from './obstacles';
 export {
   addFlow,

@@ -1,15 +1,19 @@
 import { expect, test } from '@playwright/test';
 
-// Sprint 4: 縦書き vertical-meros demo の 5 観点 + scroll-snap 維持を assert する E2E。
+// 縦書き vertical-meros demo の 6 観点 + scroll-snap 維持を assert する E2E。
 //
-// 観点 1: N 切替 (1920x1080→N=8 / 1024x768→N=4 / 375x667→N=2)
+// breakpoints は window.innerHeight 比較 (root font-size 16px 基準):
+//   N=8: 140em(2240px) / N=7: 120em(1920px) / N=6: 100em(1600px) /
+//   N=5: 80em(1280px) / N=4: 60em(960px) / N=3: 40em(640px) / N=2: 0
+//
+// 観点 1: N 切替 (1280x2300→N=8 / 1024x1080→N=4 / 375x600→N=2)
 // 観点 2: 画像 aspect (bbox width/height ≒ natural aspect、 許容 ±5%)
 // 観点 3: 画像と本文の矩形交差 = 0 (各 obstacle bbox × 各 text line bbox の交差 px = 0)
-// 観点 4: data-when-columns が viewport ごとに 2/4/6/8 のいずれかに切り替わる
+// 観点 4: data-when-columns が viewport ごとに切り替わる
 // 観点 5: 画像周囲のテキスト回り込み (各画像 bbox の 4 辺それぞれから文字幅 1 個分以内に text line)
+// 観点 6: 各 column の冒頭 5 文字が visible obstacle の bbox 範囲内に物理的に侵食しない
 // scroll-snap: book root の scroll-snap-type が 'y mandatory'
 //
-// 内部実装の関数名 (normalizeVerticalWhenColumns 等) には触れない。
 // 外部から観測可能な属性 (data-*, getBoundingClientRect, computed style) のみで判定する。
 
 interface CaseDef {
@@ -20,9 +24,9 @@ interface CaseDef {
 }
 
 const CASES: ReadonlyArray<CaseDef> = [
-  { name: 'desktop-1920x1080', width: 1920, height: 1080, expectedN: 8 },
-  { name: 'tablet-1024x768', width: 1024, height: 768, expectedN: 4 },
-  { name: 'mobile-375x667', width: 375, height: 667, expectedN: 2 },
+  { name: 'tall-desktop-1280x2300', width: 1280, height: 2300, expectedN: 8 },
+  { name: 'desktop-1024x1080', width: 1024, height: 1080, expectedN: 4 },
+  { name: 'mobile-375x600', width: 375, height: 600, expectedN: 2 },
 ];
 
 // 走れメロス画像 3 枚の natural aspect (width / height)。
@@ -85,11 +89,12 @@ for (const c of CASES) {
       page,
     }) => {
       const boxes = await page.evaluate(() => {
+        // 画像 obstacle のみ (h1 見出し等は aspect 検査の対象外)
         const els = Array.from(
           document.querySelectorAll('.tilepage-obstacle[data-id]'),
         ) as HTMLElement[];
         return els
-          .filter((el) => el.offsetParent !== null)
+          .filter((el) => el.offsetParent !== null && el.tagName === 'IMG')
           .map((el) => {
             const r = el.getBoundingClientRect();
             return { id: el.dataset.id, width: r.width, height: r.height };
@@ -97,12 +102,10 @@ for (const c of CASES) {
       });
       expect(boxes.length).toBeGreaterThan(0);
       for (const b of boxes) {
-        // 描画 0 サイズはこの観点で判定不能なので skip 用に明示 fail
         expect(b.width).toBeGreaterThan(0);
         expect(b.height).toBeGreaterThan(0);
         const observed = b.width / b.height;
         const ratio = observed / NATURAL_ASPECT;
-        // ratio が 1 ± ASPECT_TOLERANCE の範囲にあること
         expect(ratio).toBeGreaterThanOrEqual(1 - ASPECT_TOLERANCE);
         expect(ratio).toBeLessThanOrEqual(1 + ASPECT_TOLERANCE);
       }
@@ -204,10 +207,13 @@ for (const c of CASES) {
       // block-end (物理 left) 側のみに発生する (cell の start 側に寄せて配置されるため)。
       const result = await page.evaluate(
         ({ maxGap, pageEdgeThreshold }) => {
+          // 画像 obstacle のみ (h1 見出し等は wrap gap 検査の対象外)
           const obstacles = Array.from(
             document.querySelectorAll('.tilepage-obstacle[data-id]'),
           ) as HTMLElement[];
-          const visibleObstacles = obstacles.filter((el) => el.offsetParent !== null);
+          const visibleObstacles = obstacles.filter(
+            (el) => el.offsetParent !== null && el.tagName === 'IMG',
+          );
 
           const textRects: { left: number; top: number; right: number; bottom: number }[] = [];
           const flowTexts = Array.from(

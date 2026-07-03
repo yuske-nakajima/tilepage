@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineHeadlineHorizontal } from '../obstacles/headline';
-import { addObstacleHorizontal, addPage, createBook } from '../TilePage';
+import { defineHeadlineHorizontal, defineHeadlineVertical } from '../obstacles/headline';
+import { addObstacleHorizontal, addPage, createBook, type WritingMode } from '../TilePage';
 
 class FakeResizeObserver {
   observe(_el: Element): void {}
@@ -20,11 +20,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function makeBook() {
+function makeBook(writingMode: WritingMode = 'horizontal-tb') {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const book = createBook({
     container,
+    writingMode,
     columns: 4,
     observeResize: false,
   });
@@ -108,6 +109,89 @@ describe('defineHeadlineHorizontal', () => {
     const b = factory(book, {
       text: 'B',
       whenColumns: { 4: { page: 1, at: { col: 2, line: 1 }, cols: 1, lines: 1 } },
+    });
+    expect(a.element).not.toBe(b.element);
+    expect(a.element.textContent).toBe('A');
+    expect(b.element.textContent).toBe('B');
+  });
+});
+
+describe('defineHeadlineVertical', () => {
+  it('呼び出すと (book, options) => Obstacle の関数を返す', () => {
+    const factory = defineHeadlineVertical({});
+    expect(typeof factory).toBe('function');
+  });
+
+  it('生成される element の tagName は H1 固定', () => {
+    const book = makeBook('vertical-rl');
+    const obstacle = defineHeadlineVertical({})(book, {
+      text: '見出し',
+      whenColumns: { 4: { page: 1, at: { row: 1, char: 1 }, chars: 1, rows: 3 } },
+    });
+    expect(obstacle.element.tagName).toBe('H1');
+  });
+
+  it('text content が options.text を反映する', () => {
+    const book = makeBook('vertical-rl');
+    const obstacle = defineHeadlineVertical({})(book, {
+      text: '走れメロス',
+      whenColumns: { 4: { page: 1, at: { row: 1, char: 1 }, chars: 1, rows: 3 } },
+    });
+    expect(obstacle.element.textContent).toBe('走れメロス');
+  });
+
+  it('style プロパティが inline style にパススルーされる (全 5 プロパティ)', () => {
+    const book = makeBook('vertical-rl');
+    const obstacle = defineHeadlineVertical({
+      fontSize: '1.8em',
+      lineHeight: 1.2,
+      fontWeight: 700,
+      color: 'rgb(10, 20, 30)',
+      fontFamily: 'serif',
+    })(book, {
+      text: 't',
+      whenColumns: { 4: { page: 1, at: { row: 1, char: 1 }, chars: 1, rows: 3 } },
+    });
+    const s = obstacle.element.style;
+    expect(s.fontSize).toBe('1.8em');
+    expect(s.lineHeight).toBe('1.2');
+    expect(s.fontWeight).toBe('700');
+    expect(s.color).toBe('rgb(10, 20, 30)');
+    expect(s.fontFamily).toBe('serif');
+  });
+
+  it('未指定の style キーは inline style に書き込まれない (デフォルト押し付けなし)', () => {
+    const book = makeBook('vertical-rl');
+    const obstacle = defineHeadlineVertical({})(book, {
+      text: 't',
+      whenColumns: { 4: { page: 1, at: { row: 1, char: 1 }, chars: 1, rows: 3 } },
+    });
+    expect(obstacle.element.style.fontSize).toBe('');
+    expect(obstacle.element.style.lineHeight).toBe('');
+    expect(obstacle.element.style.fontWeight).toBe('');
+    expect(obstacle.element.style.color).toBe('');
+    expect(obstacle.element.style.fontFamily).toBe('');
+  });
+
+  it('UA stylesheet の h1 margin は常にリセットされる', () => {
+    const book = makeBook('vertical-rl');
+    const obstacle = defineHeadlineVertical({})(book, {
+      text: 't',
+      whenColumns: { 4: { page: 1, at: { row: 1, char: 1 }, chars: 1, rows: 3 } },
+    });
+    expect(obstacle.element.style.margin).toBe('0px');
+  });
+
+  it('同じ factory を 2 回呼び出すと独立した Obstacle を生成する', () => {
+    const book = makeBook('vertical-rl');
+    const factory = defineHeadlineVertical({ fontSize: '2em' });
+    const a = factory(book, {
+      text: 'A',
+      whenColumns: { 4: { page: 1, at: { row: 1, char: 1 }, chars: 1, rows: 1 } },
+    });
+    const b = factory(book, {
+      text: 'B',
+      whenColumns: { 4: { page: 1, at: { row: 1, char: 2 }, chars: 1, rows: 1 } },
     });
     expect(a.element).not.toBe(b.element);
     expect(a.element.textContent).toBe('A');

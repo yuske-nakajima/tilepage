@@ -1,13 +1,15 @@
 import {
   addObstacleHorizontal,
+  addObstacleVertical,
   type Book,
   type HorizontalObstacleOptions,
   type Obstacle,
+  type VerticalObstacleOptions,
 } from '../TilePage';
 
 // 見出し用のインラインスタイル指定。
 // 未指定キーは inline style に触れず、 利用者の CSS / 親要素継承に委ねる。
-export interface HeadlineHorizontalStyle {
+interface HeadlineStyle {
   fontSize?: string;
   lineHeight?: number | string;
   fontWeight?: string | number;
@@ -15,7 +17,9 @@ export interface HeadlineHorizontalStyle {
   fontFamily?: string;
 }
 
-// 見出し obstacle 配置オプション。 whenColumns は HorizontalObstacleOptions の同名 field と同形。
+export type HeadlineHorizontalStyle = HeadlineStyle;
+export type HeadlineVerticalStyle = HeadlineStyle;
+
 export interface HeadlineHorizontalOptions {
   text: string;
   whenColumns: HorizontalObstacleOptions['whenColumns'];
@@ -23,12 +27,16 @@ export interface HeadlineHorizontalOptions {
   shapeMargin?: HorizontalObstacleOptions['shapeMargin'];
 }
 
-// 内部生成タグは <h1> 固定。 level 引数は持たない (公開 API 表面を最小化する)。
+export interface HeadlineVerticalOptions {
+  text: string;
+  whenColumns: VerticalObstacleOptions['whenColumns'];
+  shape?: VerticalObstacleOptions['shape'];
+  shapeMargin?: VerticalObstacleOptions['shapeMargin'];
+}
+
 const HEADLINE_TAG = 'h1';
 
-// HeadlineHorizontalStyle を h1 element の inline style にパススルーする。
-// undefined のキーは触らず、 spec の「未指定時にデフォルト押し付けなし」 を満たす。
-function applyStyle(el: HTMLElement, style: HeadlineHorizontalStyle): void {
+function applyStyle(el: HTMLElement, style: HeadlineStyle): void {
   if (style.fontSize !== undefined) el.style.fontSize = style.fontSize;
   if (style.lineHeight !== undefined) el.style.lineHeight = String(style.lineHeight);
   if (style.fontWeight !== undefined) el.style.fontWeight = String(style.fontWeight);
@@ -36,9 +44,6 @@ function applyStyle(el: HTMLElement, style: HeadlineHorizontalStyle): void {
   if (style.fontFamily !== undefined) el.style.fontFamily = style.fontFamily;
 }
 
-// defineHeadlineHorizontal(style) → (book, options) => Obstacle のカリー化 API。
-// 戻り値関数を複数回呼んでも独立した Obstacle が生成される (state を持たない)。
-// 内部実装は <h1> を生成し style を inline で適用、 addObstacleHorizontal の element 経路に流す。
 export function defineHeadlineHorizontal(
   style: HeadlineHorizontalStyle,
 ): (book: Book, options: HeadlineHorizontalOptions) => Obstacle {
@@ -49,6 +54,23 @@ export function defineHeadlineHorizontal(
     el.style.margin = '0';
     applyStyle(el, style);
     return addObstacleHorizontal(book, {
+      element: el,
+      whenColumns: options.whenColumns,
+      shape: options.shape,
+      shapeMargin: options.shapeMargin,
+    });
+  };
+}
+
+export function defineHeadlineVertical(
+  style: HeadlineVerticalStyle,
+): (book: Book, options: HeadlineVerticalOptions) => Obstacle {
+  return (book, options) => {
+    const el = document.createElement(HEADLINE_TAG);
+    el.textContent = options.text;
+    el.style.margin = '0';
+    applyStyle(el, style);
+    return addObstacleVertical(book, {
       element: el,
       whenColumns: options.whenColumns,
       shape: options.shape,
