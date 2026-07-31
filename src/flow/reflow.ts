@@ -35,6 +35,9 @@ export function createReflowController(options: ReflowOptions): ReflowController
   const raf = win.requestAnimationFrame.bind(win);
   const caf = win.cancelAnimationFrame.bind(win);
 
+  let rootObserved = false;
+  let observedPages = new Set<HTMLElement>();
+
   const observer = new (win as unknown as { ResizeObserver: typeof ResizeObserver }).ResizeObserver(
     () => {
       if (destroyed) return;
@@ -47,10 +50,20 @@ export function createReflowController(options: ReflowOptions): ReflowController
     },
   );
 
-  function attachObservers(): void {
-    observer.disconnect();
-    observer.observe(root);
-    for (const p of observePages()) observer.observe(p);
+  function syncObservers(): void {
+    if (!rootObserved) {
+      observer.observe(root);
+      rootObserved = true;
+    }
+
+    const nextPages = new Set(observePages());
+    for (const page of observedPages) {
+      if (!nextPages.has(page)) observer.unobserve(page);
+    }
+    for (const page of nextPages) {
+      if (!observedPages.has(page)) observer.observe(page);
+    }
+    observedPages = nextPages;
   }
 
   function request(): void {
@@ -70,7 +83,7 @@ export function createReflowController(options: ReflowOptions): ReflowController
   function executeReflow(): void {
     if (destroyed) return;
     // run() が throw しても state machine が 'reflowing' で stuck しないよう、
-    // 終了処理 (state 戻し / observer 再 attach / pendingExtra ドレイン) を
+    // 終了処理 (state 戻し / observer 対象同期 / pendingExtra ドレイン) を
     // 必ず finally で実行する。エラーは finally 後に再 throw して呼び出し元に surface する。
     let firstError: unknown;
     currentState = 'reflowing';
@@ -83,7 +96,7 @@ export function createReflowController(options: ReflowOptions): ReflowController
       isReflowing = false;
     }
     try {
-      attachObservers();
+      syncObservers();
     } catch (e) {
       if (firstError === undefined) firstError = e;
     }
@@ -100,7 +113,7 @@ export function createReflowController(options: ReflowOptions): ReflowController
         isReflowing = false;
       }
       try {
-        attachObservers();
+        syncObservers();
       } catch (e) {
         if (firstError === undefined) firstError = e;
       }
@@ -118,7 +131,7 @@ export function createReflowController(options: ReflowOptions): ReflowController
     executeReflow();
   }
 
-  attachObservers();
+  syncObservers();
 
   return {
     request,
@@ -129,6 +142,8 @@ export function createReflowController(options: ReflowOptions): ReflowController
         frameHandle = null;
       }
       observer.disconnect();
+      rootObserved = false;
+      observedPages.clear();
       currentState = 'idle';
     },
     state(): ReflowState {

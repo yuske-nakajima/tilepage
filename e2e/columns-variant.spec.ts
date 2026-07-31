@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { visibleTextOf } from './helpers/visibleText';
+import { waitForTilePageReady } from './helpers/waitForTilePageReady';
 
 // Sprint 2: RED test。 columns-variant demo の supportedColumns / whenColumns / line グリッド
 // 配置を E2E で検証する。 Sprint 3/4 で実装される API への期待を assertion として固定する。
@@ -61,9 +62,7 @@ for (const { width, height, expectedN } of CASES) {
     test.beforeEach(async ({ page }) => {
       await page.goto('/e2e/fixtures/columns-variant/');
       await page.waitForSelector('#app[data-ready="true"]');
-      await page.waitForSelector('.tilepage-book');
-      await page.waitForLoadState('networkidle');
-      await page.waitForTimeout(500);
+      await waitForTilePageReady(page);
     });
 
     test(`book root has data-active-columns="${expectedN}"`, async ({ page }) => {

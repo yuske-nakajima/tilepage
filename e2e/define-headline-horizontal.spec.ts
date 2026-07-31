@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { waitForTilePageReady } from './helpers/waitForTilePageReady';
 
 // defineHeadlineHorizontal で配置した main-title (h1[data-id="main-title"]) を厳密検証する。
 // layout-verification.md 必須観点を全て満たす:
@@ -30,15 +31,7 @@ for (const v of VIEWPORTS) {
 
     test.beforeEach(async ({ page }) => {
       await page.goto('/demo/');
-      await page.waitForSelector('.tilepage-book');
-      await page.evaluate(() => document.fonts.ready);
-      await page.waitForLoadState('networkidle');
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) =>
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-          ),
-      );
+      await waitForTilePageReady(page);
     });
 
     test(`main-title は viewport 内に visible で表示される + 衝突なし + スクショ保存 (N=${v.expectedN})`, async ({

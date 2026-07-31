@@ -2,15 +2,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createReflowController } from '../reflow';
 
-// ResizeObserver の jsdom shim。observe / disconnect を no-op で受ける。
+// ResizeObserver の jsdom shim。登録・解除された要素を検証用に記録する。
 class FakeResizeObserver {
-  observe(_el: Element): void {}
-  unobserve(_el: Element): void {}
+  static readonly observed: Element[] = [];
+  static readonly unobserved: Element[] = [];
+
+  observe(el: Element): void {
+    FakeResizeObserver.observed.push(el);
+  }
+  unobserve(el: Element): void {
+    FakeResizeObserver.unobserved.push(el);
+  }
   disconnect(): void {}
 }
 
 beforeEach(() => {
   document.body.innerHTML = '';
+  FakeResizeObserver.observed.length = 0;
+  FakeResizeObserver.unobserved.length = 0;
   (globalThis as unknown as { ResizeObserver: typeof ResizeObserver }).ResizeObserver =
     FakeResizeObserver as unknown as typeof ResizeObserver;
   // raf を同期実行に置き換える (debounce を待たず即時実行)。
@@ -25,6 +34,48 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe('reflow controller observations', () => {
+  it('サイズが変わっていない要素を reflow 後に再登録しない', () => {
+    const root = document.createElement('div');
+    const page = document.createElement('div');
+    root.appendChild(page);
+    document.body.appendChild(root);
+
+    const ctrl = createReflowController({
+      root,
+      observePages: () => [page],
+      run: vi.fn(),
+    });
+
+    expect(FakeResizeObserver.observed).toEqual([root, page]);
+    ctrl.flushNow();
+    expect(FakeResizeObserver.observed).toEqual([root, page]);
+    ctrl.destroy();
+  });
+
+  it('page の追加と削除を observer の対象へ反映する', () => {
+    const root = document.createElement('div');
+    const firstPage = document.createElement('div');
+    const secondPage = document.createElement('div');
+    let pages = [firstPage];
+    root.append(firstPage, secondPage);
+    document.body.appendChild(root);
+
+    const ctrl = createReflowController({
+      root,
+      observePages: () => pages,
+      run: vi.fn(),
+    });
+
+    pages = [secondPage];
+    ctrl.flushNow();
+
+    expect(FakeResizeObserver.observed).toEqual([root, firstPage, secondPage]);
+    expect(FakeResizeObserver.unobserved).toEqual([firstPage]);
+    ctrl.destroy();
+  });
 });
 
 describe('reflow controller error recovery', () => {

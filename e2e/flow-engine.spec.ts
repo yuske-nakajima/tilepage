@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { visibleTextOf } from './helpers/visibleText';
+import { waitForTilePageReady } from './helpers/waitForTilePageReady';
 
 type WritingMode = 'horizontal-tb' | 'vertical-rl';
 type ObstacleKind = 'none' | 'rect' | 'circle' | 'polygon';
@@ -68,9 +69,7 @@ test.describe('v0.4 flow-engine matrix (V === S)', () => {
             try {
               await page.goto(buildUrl({ columns, writingMode, obstacle, text: SOURCE }));
               await page.waitForSelector('#app[data-ready="true"]');
-              // レイアウト確定を待つ
-              await page.waitForLoadState('networkidle').catch(() => undefined);
-              await page.waitForTimeout(300);
+              await waitForTilePageReady(page);
 
               const { text: V } = await visibleTextOf(page, { rootSelector: '.tilepage-book' });
 
@@ -121,8 +120,7 @@ test.describe('v0.4 flow-engine width mode (V === S)', () => {
               buildWidthUrl({ columnWidth, writingMode, obstacle: 'none', text: SOURCE }),
             );
             await page.waitForSelector('#app[data-ready="true"]');
-            await page.waitForLoadState('networkidle').catch(() => undefined);
-            await page.waitForTimeout(300);
+            await waitForTilePageReady(page);
 
             const { text: V } = await visibleTextOf(page, { rootSelector: '.tilepage-book' });
             expect(V).toBe(SOURCE);

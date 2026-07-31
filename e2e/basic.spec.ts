@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { visibleTextOf } from './helpers/visibleText';
+import { waitForTilePageReady } from './helpers/waitForTilePageReady';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SOURCE_TEXT = readFileSync(resolve(__dirname, '../demo/meros.txt'), 'utf8').trim();
@@ -15,9 +16,7 @@ test.describe('TilePage demo (走れメロス / supportedColumns + whenColumns @
 
   test.beforeEach(async ({ page }) => {
     await page.goto('/demo/');
-    await page.waitForSelector('.tilepage-book');
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
+    await waitForTilePageReady(page);
   });
 
   test('book root has data-active-columns="6"', async ({ page }) => {

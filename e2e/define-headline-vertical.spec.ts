@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { waitForTilePageReady } from './helpers/waitForTilePageReady';
 
 // defineHeadlineVertical で配置した main-title (h1[data-id="main-title"]) を厳密検証する。
 // layout-verification.md 必須観点を全て満たす:
@@ -34,17 +35,7 @@ for (const v of VIEWPORTS) {
 
     test.beforeEach(async ({ page }) => {
       await page.goto('/demo/vertical-meros/');
-      await page.waitForSelector('.tilepage-book');
-      await page.evaluate(() => document.fonts.ready);
-      await page.waitForLoadState('networkidle');
-      // 画像 load → aspect 由来の variant 再解決 → reflow の追従待ち
-      await page.waitForTimeout(800);
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) =>
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-          ),
-      );
+      await waitForTilePageReady(page);
     });
 
     test(`main-title は viewport 内に visible で表示される + 衝突なし + スクショ保存 (N=${v.expectedN})`, async ({

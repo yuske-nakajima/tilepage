@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { waitForTilePageReady } from './helpers/waitForTilePageReady';
 
 // 縦書き vertical-meros demo の 6 観点 + scroll-snap 維持を assert する E2E。
 //
@@ -52,10 +53,7 @@ for (const c of CASES) {
 
     test.beforeEach(async ({ page }) => {
       await page.goto('/demo/vertical-meros/');
-      await page.waitForSelector('.tilepage-book');
-      await page.waitForLoadState('networkidle');
-      // 画像 load → variant 再解決 → reflow の追従待ち
-      await page.waitForTimeout(800);
+      await waitForTilePageReady(page);
     });
 
     test(`観点 1: 段数 N=${c.expectedN} に切り替わる (data-active-columns)`, async ({ page }) => {
