@@ -102,15 +102,15 @@ function extractVisibleText(args: {
   };
 
   // rect が root と全 overflow 祖先と交差していれば visible とみなす
-  // 行端で width/height=0 の rect が返ることがある (空白の collapse、行末 word break 等)。
-  // この場合 rect 自体は面積 0 だが、 left/top 点が ancestor 内なら「読める文字」として扱う。
+  // 両軸が 0 の rect は矩形交差を判定できないため、left/top 点が ancestor 内なら visible と扱う。
   const isVisible = (rect: DOMRect, parentEl: Element): boolean => {
     const pointInside = (
       r: { left: number; top: number; right: number; bottom: number },
       x: number,
       y: number,
-    ): boolean => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
-    const zeroSize = rect.width <= 0 || rect.height <= 0;
+    ): boolean =>
+      x >= r.left - EPS && x <= r.right + EPS && y >= r.top - EPS && y <= r.bottom + EPS;
+    const zeroSize = rect.width <= 0 && rect.height <= 0;
     if (zeroSize) {
       if (!pointInside(rootRect, rect.left, rect.top)) return false;
       for (const anc of overflowAncestorsOf(parentEl)) {

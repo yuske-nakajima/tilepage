@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { visibleTextOf } from './helpers/visibleText';
+import { waitForTilePageReady } from './helpers/waitForTilePageReady';
 
 type WritingMode = 'horizontal-tb' | 'vertical-rl';
 type ObstacleKind = 'none' | 'rect' | 'circle' | 'polygon';
@@ -39,12 +40,6 @@ function buildUrl(params: {
   return `/e2e/fixtures/v0.4/?${q.toString()}`;
 }
 
-// 各 step で V===S を満たすか測る。reflow を待つために flushNow を呼べないので debounce 後に少し待つ。
-async function waitForReflow(page: import('@playwright/test').Page): Promise<void> {
-  await page.waitForLoadState('networkidle').catch(() => undefined);
-  await page.waitForTimeout(500);
-}
-
 async function pageCount(page: import('@playwright/test').Page): Promise<number> {
   return page.locator('.tilepage-page').count();
 }
@@ -81,13 +76,13 @@ test.describe('v0.4 flow-engine resize sweep', () => {
           }),
         );
         await page.waitForSelector('#app[data-ready="true"]');
-        await waitForReflow(page);
+        await waitForTilePageReady(page);
 
         const counts: number[] = [];
 
         for (const width of [1200, 1500, 1800, 1200] as const) {
           await page.setViewportSize({ width, height: 900 });
-          await waitForReflow(page);
+          await waitForTilePageReady(page);
           const { text: V } = await visibleTextOf(page, { rootSelector: '.tilepage-book' });
           expect(V, `viewport ${width}`).toBe(SOURCE);
           counts.push(await pageCount(page));
@@ -113,16 +108,16 @@ test.describe('v0.4 flow-engine resize sweep', () => {
         buildUrl({ columns: 6, writingMode: 'horizontal-tb', obstacle: 'none', text: SOURCE }),
       );
       await page.waitForSelector('#app[data-ready="true"]');
-      await waitForReflow(page);
+      await waitForTilePageReady(page);
       const initialCount = await pageCount(page);
 
       // viewport を極端に狭く (800) → 広く (2400) して page 数が変わることを期待。
       await page.setViewportSize({ width: 800, height: 900 });
-      await waitForReflow(page);
+      await waitForTilePageReady(page);
       const narrowCount = await pageCount(page);
 
       await page.setViewportSize({ width: 2400, height: 900 });
-      await waitForReflow(page);
+      await waitForTilePageReady(page);
       const wideCount = await pageCount(page);
 
       // どこかで page 数が変化していることを要求 (V===S は他テストで担保)。
