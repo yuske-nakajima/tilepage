@@ -7,3 +7,9 @@ blockExoticSubdeps: true
 # ライフサイクルスクリプトの実行をホワイトリスト方式で制限
 onlyBuiltDependencies:
   - esbuild
+
+# audit 指摘 (brace-expansion / minimatch / source-map-js の DoS) の解消
+overrides:
+  "brace-expansion@>=3.0.0 <5.0.12": "5.0.12"
+  "minimatch@>=7.0.0 <11.0.1": "11.0.3"
+  "source-map-js@>=1.0.0 <1.2.2": "1.2.2"
